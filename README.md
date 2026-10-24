@@ -5,26 +5,43 @@ An original, authoritative real-time multiplayer mobile game where players turn 
 Inspired by the core mechanics of real-life GPS manhunts:
 - **Hunters (Chasers)** track runners via tactical radar maps with periodic location snapshots.
 - **Runners** navigate using a high-precision directional geodesic compass and tactical evasive power-ups (Stealth, Decoy, Map View).
-- **Referees** monitor safety and enforce geofenced boundaries.
+- **Referees** monitor safety and enforce geofenced boundaries in Family Mode.
 
 ---
 
-## Key Features
+## Architecture & Status
 
-1. **Authoritative Anti-Cheat Game Engine**: Match timers, catch proximity checks, state transitions, and power-up cooldowns are authoritatively computed on the server.
-2. **Zero-Leak Location Privacy**: Opponent raw GPS coordinates are never distributed across the wire. Hunters receive only authorized periodic snapshots; Runners receive relative geodesic bearings without revealing exact hunter positions.
-3. **Dynamic Geofenced Play Zones**: Circle and polygon boundary mapping with out-of-bounds warning grace zones and optional shrinking play zones.
-4. **Offline & Drift Resilient**: Multi-sample GPS filtering, magnetometer-to-course fallback, and seamless state re-synchronization upon network interruption.
-5. **High-Contrast Outdoor HUD**: Premium dark-mode interface designed for quick readability in bright sunlight and low distraction while running.
+- **Phase 0 (Discovery & Reference Research)**: Completed & Documented.
+- **Phase 1 (Foundation, Design System & Geo Engine)**: Completed & Tested (45/45 Unit Tests Passing).
+- **Phase 2 (Auth & Lobbies)**: Next Phase.
 
 ---
 
-## Quick Start
+## Key Technical Features
+
+1. **Pure Mathematical Geo Engine (`src/lib/geo/`)**:
+   - Haversine great-circle distance calculation with finite bounds validation.
+   - Initial bearing (forward azimuth) normalized to $[0, 360)$.
+   - Relative device bearing $(Bearing - Heading + 360) \pmod{360}$ with graceful degradation when sensors are uncalibrated.
+   - Point-in-Circle and Point-in-Polygon (Ray-Casting) geofencing with out-of-bounds warning grace zones.
+   - Location freshness evaluation (`FRESH`, `DELAYED`, `STALE`, `EXPIRED`) and GPS accuracy filtering.
+2. **Tactical Outdoor Design System (`src/theme/`, `src/components/ui/`)**:
+   - High-contrast obsidian dark palette (`#0B0E14`) optimized for outdoor sunlight legibility and OLED battery conservation.
+   - Faction visual accents: Cyber Cyan for Hunters, Neon Amber for Runners, Overseer Violet for Referees.
+   - Reusable tactical components: `Button`, `Card`, `Badge`, `LoadingSpinner`, `ErrorFallback`, `PermissionPrompt`.
+3. **Decoupled Location Abstraction (`src/services/location/`)**:
+   - `ILocationService` interface separating device APIs from game state.
+   - Real `ExpoLocationService` using `expo-location` with high navigation accuracy and drift filtering.
+   - Isolated `MockLocationService` for automated multi-client simulations.
+   - Zero auto-tracking on app launch; tracking is explicitly triggered by match flows.
+
+---
+
+## Quick Start & Verification
 
 ### 1. Prerequisites
-- [Node.js](https://nodejs.org/) v18+ (tested on v24)
+- [Node.js](https://nodejs.org/) v18+ (tested on v24.13.0)
 - npm or yarn
-- Expo Go app on mobile (or Android/iOS Simulator)
 
 ### 2. Setup
 ```bash
@@ -34,11 +51,24 @@ npm install
 cp .env.example .env
 ```
 
-### 3. Run Development Server
+### 3. Run Unit Tests
+```bash
+npm test
+```
+Runs 45 unit tests covering geodesic calculations, bearings, heading transitions, geofencing, freshness, and location service contracts.
+
+### 4. Type Checking
+```bash
+npm run typecheck
+```
+
+### 5. Start Development Server
 ```bash
 npx expo start
 ```
-Scan the QR code with your phone using Expo Go or run on an emulator (`a` for Android).
+- Press `a` for Android Emulator.
+- Press `w` for Web preview.
+- Or scan QR code with physical phone using Expo Go.
 
 ---
 

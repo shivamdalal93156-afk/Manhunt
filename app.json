@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "GPS Manhunt",
+    "slug": "gps-manhunt",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "manhunt",
+    "splash": {
+      "backgroundColor": "#0B0E14"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.manhunt.gpsmanhunt",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "GPS Manhunt requires your location to position you on the game field and calculate directions during an active match.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "GPS Manhunt requires background location while a match is actively running to allow you to play with your device in your pocket.",
+        "UIBackgroundModes": [
+          "location"
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0E14"
+      },
+      "package": "com.manhunt.gpsmanhunt",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow GPS Manhunt to track your position while a chase match is active."
+        }
+      ],
+      "expo-asset"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
