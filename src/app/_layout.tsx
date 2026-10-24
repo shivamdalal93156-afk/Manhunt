@@ -50,6 +50,37 @@ export default function RootLayout() {
             headerBackTitle: 'Back',
           }}
         />
+        <Stack.Screen
+          name="lobby/[id]"
+          options={{
+            title: 'SQUAD LOBBY',
+            headerBackVisible: false,
+          }}
+        />
+        <Stack.Screen
+          name="game/hunter"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="game/runner"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="game/referee"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="game/results"
+          options={{
+            headerShown: false,
+          }}
+        />
       </Stack>
     </SafeAreaProvider>
   );

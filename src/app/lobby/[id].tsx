@@ -46,16 +46,19 @@ export default function LobbyScreen() {
     };
   }, [id, subscribeToLobby]);
 
-  // Handle match launch -> route to game active screen when phase 3 arrives
+  // Handle match launch -> route to role-specific gameplay screen
   useEffect(() => {
-    if (lobbyState?.status === 'COUNTDOWN') {
-      // Match launched!
-      Alert.alert(
-        'COUNTDOWN INITIATED',
-        'Runners have a 60-second head start to disperse into the zone!'
-      );
+    if (lobbyState?.status === 'COUNTDOWN' || lobbyState?.status === 'ACTIVE') {
+      const myRole = session?.myRole ?? 'RUNNER';
+      if (myRole === 'HUNTER') {
+        router.replace('/game/hunter');
+      } else if (myRole === 'REFEREE') {
+        router.replace('/game/referee');
+      } else {
+        router.replace('/game/runner');
+      }
     }
-  }, [lobbyState?.status]);
+  }, [lobbyState?.status, session?.myRole, router]);
 
   if (!lobbyState) {
     return (
