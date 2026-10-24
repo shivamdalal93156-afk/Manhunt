@@ -5,7 +5,7 @@ import { borderRadius, colors, spacing } from '@/theme/tokens';
 interface CardProps {
   children: React.ReactNode;
   variant?: 'default' | 'hunter' | 'runner' | 'referee' | 'elevated';
-  style?: ViewStyle;
+  style?: ViewStyle | ViewStyle[];
 }
 
 export const Card: React.FC<CardProps> = ({

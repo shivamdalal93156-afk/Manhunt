@@ -51,6 +51,20 @@ export default function RootLayout() {
           }}
         />
         <Stack.Screen
+          name="rules"
+          options={{
+            title: 'RULES & SAFETY',
+            headerBackTitle: 'Back',
+          }}
+        />
+        <Stack.Screen
+          name="map/editor"
+          options={{
+            title: 'PLAY ZONE EDITOR',
+            headerBackTitle: 'Back',
+          }}
+        />
+        <Stack.Screen
           name="lobby/[id]"
           options={{
             title: 'SQUAD LOBBY',

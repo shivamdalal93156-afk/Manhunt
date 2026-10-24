@@ -122,10 +122,14 @@ export default function HomeScreen() {
         </View>
 
         {/* Game Rules & Intelligence Showcase */}
-        <View style={styles.sectionHeader}>
+        <TouchableOpacity
+          style={styles.sectionHeader}
+          onPress={() => router.push('/rules')}
+          activeOpacity={0.7}
+        >
           <Text style={styles.sectionTitle}>TACTICAL DOCTRINE</Text>
-          <Badge label="RULES" variant="neutral" />
-        </View>
+          <Badge label="RULES & SAFETY ↗" variant="neutral" />
+        </TouchableOpacity>
 
         <Card variant="hunter" style={styles.roleCard}>
           <View style={styles.roleHeader}>

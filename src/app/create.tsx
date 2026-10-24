@@ -134,6 +134,14 @@ export default function CreateMatchScreen() {
           <Text style={styles.summaryLabel}>Catch Validation Threshold:</Text>
           <Text style={styles.summaryVal}>15 Meters Proximity</Text>
         </View>
+
+        <Button
+          title="OPEN PLAY ZONE EDITOR"
+          variant="secondary"
+          size="sm"
+          onPress={() => router.push('/map/editor')}
+          style={{ marginTop: spacing.sm }}
+        />
       </Card>
 
       <Button
