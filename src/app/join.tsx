@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Alert,
   StyleSheet,
   Text,
   TextInput,
@@ -7,26 +8,39 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Badge, Button, Card } from '@/components/ui';
+import { Button, ErrorFallback } from '@/components/ui';
+import { useLobbyStore } from '@/store/lobbyStore';
+import { PlayerRole } from '@/types/lobby';
 import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
 
 export default function JoinMatchScreen() {
   const router = useRouter();
+  const { joinMatch, isLoading, error, clearError } = useLobbyStore();
   const [joinCode, setJoinCode] = useState('');
-  const [selectedRole, setSelectedRole] = useState<'RUNNER' | 'HUNTER'>('RUNNER');
+  const [selectedRole, setSelectedRole] = useState<PlayerRole>('RUNNER');
+
+  const handleJoin = async () => {
+    if (joinCode.trim().length < 4) return;
+    try {
+      const session = await joinMatch(joinCode, selectedRole);
+      router.push(`/lobby/${session.gameId}`);
+    } catch (err: unknown) {
+      Alert.alert(
+        'JOIN MATCH FAILED',
+        err instanceof Error ? err.message : 'Invalid code or lobby is full'
+      );
+    }
+  };
 
   return (
     <View style={styles.container}>
-      {/* Dev Phase Indicator Banner */}
-      <Card variant="elevated" style={styles.devBanner}>
-        <View style={styles.devHeader}>
-          <Text style={styles.devTag}>PHASE 1 FOUNDATION PREVIEW</Text>
-          <Badge label="IN DEVELOPMENT" variant="warning" />
-        </View>
-        <Text style={styles.devText}>
-          Enter the 6-character match invitation code to join a match lobby. Live multiplayer state synchronization activates in Phase 2.
-        </Text>
-      </Card>
+      {error && (
+        <ErrorFallback
+          error={error}
+          onRetry={clearError}
+          title="ENTRY DENIED"
+        />
+      )}
 
       <Text style={styles.inputLabel}>ENTER 6-CHARACTER GAME CODE</Text>
       <TextInput
@@ -78,12 +92,13 @@ export default function JoinMatchScreen() {
       </View>
 
       <Button
-        title="JOIN SQUAD LOBBY (PHASE 2)"
+        title={isLoading ? 'VERIFYING CODE...' : 'JOIN SQUAD LOBBY'}
         variant={selectedRole === 'HUNTER' ? 'hunter' : 'runner'}
         size="lg"
         fullWidth
-        disabled={joinCode.length < 4}
-        onPress={() => router.back()}
+        disabled={joinCode.trim().length < 4 || isLoading}
+        loading={isLoading}
+        onPress={handleJoin}
         style={styles.joinBtn}
       />
     </View>

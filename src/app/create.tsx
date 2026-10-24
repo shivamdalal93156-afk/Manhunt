@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -7,27 +8,42 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Badge, Button, Card } from '@/components/ui';
+import { Button, Card, ErrorFallback } from '@/components/ui';
+import { useLobbyStore } from '@/store/lobbyStore';
 import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
 
 export default function CreateMatchScreen() {
   const router = useRouter();
+  const { createMatch, isLoading, error, clearError } = useLobbyStore();
   const [selectedDuration, setSelectedDuration] = useState(30);
   const [selectedPing, setSelectedPing] = useState(30);
   const [selectedRadius, setSelectedRadius] = useState(500);
 
+  const handleCreate = async () => {
+    try {
+      const session = await createMatch({
+        durationMinutes: selectedDuration,
+        pingIntervalSeconds: selectedPing,
+        zoneRadiusMeters: selectedRadius,
+      });
+      router.push(`/lobby/${session.gameId}`);
+    } catch (err: unknown) {
+      Alert.alert(
+        'CREATE MATCH FAILED',
+        err instanceof Error ? err.message : 'Unable to initialize match room'
+      );
+    }
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Dev Phase Indicator Banner */}
-      <Card variant="elevated" style={styles.devBanner}>
-        <View style={styles.devHeader}>
-          <Text style={styles.devTag}>PHASE 1 FOUNDATION PREVIEW</Text>
-          <Badge label="IN DEVELOPMENT" variant="warning" />
-        </View>
-        <Text style={styles.devText}>
-          Match creation parameters are configured below. Authoritative lobby initialization and Supabase RPC integration activate in Phase 2.
-        </Text>
-      </Card>
+      {error && (
+        <ErrorFallback
+          error={error}
+          onRetry={clearError}
+          title="INITIALIZATION FAILED"
+        />
+      )}
 
       {/* Match Parameters */}
       <Text style={styles.sectionTitle}>MATCH DURATION</Text>
@@ -121,11 +137,12 @@ export default function CreateMatchScreen() {
       </Card>
 
       <Button
-        title="INITIALIZE LOBBY (PHASE 2)"
+        title={isLoading ? 'INITIALIZING SQUAD...' : 'INITIALIZE LOBBY'}
         variant="hunter"
         size="lg"
         fullWidth
-        onPress={() => router.back()}
+        loading={isLoading}
+        onPress={handleCreate}
         style={styles.submitBtn}
       />
     </ScrollView>

@@ -57,6 +57,13 @@ describe('Geo Bearing & Compass Direction Calculations', () => {
       expect(initialBearing(from, to)).toBeCloseTo(270, 4);
     });
 
+    it('calculates initial bearing across the antimeridian (+179 to -179 Eastbound)', () => {
+      const from = { latitude: 0, longitude: 179 };
+      const to = { latitude: 0, longitude: -179 };
+      // Going from +179° to -179° heading East across the antimeridian is bearing 90° (due East)
+      expect(initialBearing(from, to)).toBeCloseTo(90, 4);
+    });
+
     it('returns 0 for identical points', () => {
       const pt = { latitude: 37.7749, longitude: -122.4194 };
       expect(initialBearing(pt, pt)).toBe(0);

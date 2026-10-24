@@ -69,6 +69,16 @@ describe('Geo Distance & Coordinate Validation', () => {
       expect(distance).toBeCloseTo(111195, -1);
     });
 
+    it('handles antimeridian crossing (+179 to -179 deg longitude)', () => {
+      // 2 degrees longitude separation across the 180° antimeridian at the Equator
+      const p1 = { latitude: 0, longitude: 179 };
+      const p2 = { latitude: 0, longitude: -179 };
+
+      const distance = haversineDistance(p1, p2);
+      // Expected distance for 2 deg longitude at equator ~ 222,390 meters
+      expect(distance).toBeCloseTo(222390, -2);
+    });
+
     it('calculates short tactical sprint distances accurately (~15m catch distance)', () => {
       // Point A to Point B ~15m apart
       const hunter = { latitude: 37.774900, longitude: -122.419400 };
