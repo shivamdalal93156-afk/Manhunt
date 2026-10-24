@@ -17,86 +17,45 @@ export interface CreateMatchOptions {
   zoneRadiusMeters?: number;
 }
 
-// In-memory synchronized room store for local and fallback multi-client testing
-const localRooms = new Map<string, LobbyState>();
-const subscribers = new Map<string, Set<(state: LobbyState) => void>>();
-
-function generateJoinCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let result = '';
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
-
-function broadcastLobbyState(gameId: string, state: LobbyState) {
-  localRooms.set(gameId, state);
-  const subs = subscribers.get(gameId);
-  if (subs) {
-    subs.forEach((cb) => {
-      try {
-        cb(state);
-      } catch {
-        // Callback error safe guard
-      }
-    });
-  }
+export interface CatchSubmissionResult {
+  success: boolean;
+  message: string;
+  runnerId?: string;
+  heartsRemaining?: number;
+  isEliminated?: boolean;
+  allRunnersEliminated?: boolean;
 }
 
 class LobbyService {
+  /**
+   * Authoritatively creates a match in Supabase.
+   * Hard 30-player limit, 6-char join code generated on server.
+   * No local room fallback in production.
+   */
   async createMatch(options: CreateMatchOptions = {}): Promise<MatchSession> {
     const profile = await guestAuth.getGuestProfile();
     const durationMinutes = options.durationMinutes ?? 30;
     const pingIntervalSeconds = options.pingIntervalSeconds ?? 30;
     const zoneRadiusMeters = options.zoneRadiusMeters ?? 500;
 
-    // 1. Try remote Supabase RPC
-    try {
-      const { data, error } = await supabase.rpc('create_match', {
-        p_host_profile_id: profile.id,
-        p_duration_minutes: durationMinutes,
-        p_ping_interval_seconds: pingIntervalSeconds,
-        p_zone_radius_meters: zoneRadiusMeters,
-      });
+    const { data, error } = await supabase.rpc('create_match', {
+      p_host_profile_id: profile.id,
+      p_duration_minutes: durationMinutes,
+      p_ping_interval_seconds: pingIntervalSeconds,
+      p_zone_radius_meters: zoneRadiusMeters,
+    });
 
-      if (!error && data?.game_id && data?.join_code) {
-        return {
-          gameId: data.game_id,
-          joinCode: data.join_code,
-          hostProfileId: profile.id,
-          status: 'LOBBY',
-          settings: {
-            durationMinutes,
-            headStartSeconds: 60,
-            locationPingIntervalSeconds: pingIntervalSeconds,
-            maxPlayers: 12,
-            runnerHearts: 3,
-            catchRadiusMeters: 15,
-          },
-          playZone: {
-            type: 'circle',
-            radiusMeters: zoneRadiusMeters,
-          },
-          myPlayerId: data.player_id,
-          myRole: 'HUNTER',
-          isHost: true,
-        };
-      }
-    } catch {
-      // Fallback to local room engine
+    if (error || !data?.game_id || !data?.join_code) {
+      throw new Error(
+        `Failed to create match on server: ${error?.message || 'Server returned invalid response. Check network connection.'}`
+      );
     }
-
-    // 2. Resilient In-Memory / Simulated Match Engine (for local dev & testing)
-    const gameId = `local-${Date.now()}`;
-    const joinCode = generateJoinCode();
-    const playerId = `player-${profile.id}`;
 
     const settings: MatchSettings = {
       durationMinutes,
       headStartSeconds: 60,
       locationPingIntervalSeconds: pingIntervalSeconds,
-      maxPlayers: 12,
+      maxPlayers: 30, // Hard 30-player limit
       runnerHearts: 3,
       catchRadiusMeters: 15,
     };
@@ -106,44 +65,24 @@ class LobbyService {
       radiusMeters: zoneRadiusMeters,
     };
 
-    const hostPlayer: LobbyPlayer = {
-      id: playerId,
-      profileId: profile.id,
-      displayName: profile.displayName,
-      role: 'HUNTER',
-      status: 'ALIVE',
-      isReady: true,
-      isHost: true,
-      heartsRemaining: 3,
-      lastSeenAt: Date.now(),
-    };
-
-    const state: LobbyState = {
-      gameId,
-      joinCode,
-      status: 'LOBBY',
-      settings,
-      playZone,
-      hostProfileId: profile.id,
-      players: [hostPlayer],
-    };
-
-    localRooms.set(gameId, state);
-    localRooms.set(joinCode, state); // Key by both gameId and joinCode for fast lookup
-
     return {
-      gameId,
-      joinCode,
+      gameId: data.game_id,
+      joinCode: data.join_code,
       hostProfileId: profile.id,
       status: 'LOBBY',
       settings,
       playZone,
-      myPlayerId: playerId,
+      myPlayerId: data.player_id,
       myRole: 'HUNTER',
       isHost: true,
+      catchCode: data.catch_code,
     };
   }
 
+  /**
+   * Authoritatively joins an existing match via Supabase RPC.
+   * Enforces 30-player limit on server with atomic row locking.
+   */
   async joinMatch(
     joinCode: string,
     preferredRole: PlayerRole = 'RUNNER',
@@ -152,186 +91,139 @@ class LobbyService {
     const profile = guestProfile || (await guestAuth.getGuestProfile());
     const cleanCode = joinCode.trim().toUpperCase();
 
-    // 1. Try remote Supabase RPC
-    try {
-      const { data, error } = await supabase.rpc('join_match', {
-        p_join_code: cleanCode,
-        p_profile_id: profile.id,
-        p_preferred_role: preferredRole,
-      });
-
-      if (!error && data?.game_id) {
-        return {
-          gameId: data.game_id,
-          joinCode: data.join_code,
-          hostProfileId: '',
-          status: 'LOBBY',
-          settings: {
-            durationMinutes: 30,
-            headStartSeconds: 60,
-            locationPingIntervalSeconds: 30,
-            maxPlayers: 12,
-            runnerHearts: 3,
-            catchRadiusMeters: 15,
-          },
-          playZone: { type: 'circle', radiusMeters: 500 },
-          myPlayerId: data.player_id,
-          myRole: data.role || preferredRole,
-          isHost: !!data.is_host,
-        };
-      }
-    } catch {
-      // Fallback to local room engine
+    if (!cleanCode || cleanCode.length !== 6) {
+      throw new Error('Join code must be 6 alphanumeric characters.');
     }
 
-    // 2. Lookup in local room store
-    const state = localRooms.get(cleanCode);
-    if (!state) {
-      throw new Error(`Match with code "${cleanCode}" was not found or has expired.`);
-    }
+    const { data, error } = await supabase.rpc('join_match', {
+      p_join_code: cleanCode,
+      p_profile_id: profile.id,
+      p_preferred_role: preferredRole,
+    });
 
-    if (state.status !== 'LOBBY') {
-      throw new Error('This match has already started.');
-    }
-
-    if (state.players.length >= state.settings.maxPlayers) {
-      throw new Error('This match lobby is currently full.');
-    }
-
-    // Check if player already in room
-    let player = state.players.find((p) => p.profileId === profile.id);
-    if (!player) {
-      player = {
-        id: `player-${profile.id}`,
-        profileId: profile.id,
-        displayName: profile.displayName,
-        role: preferredRole,
-        status: 'ALIVE',
-        isReady: false,
-        isHost: false,
-        heartsRemaining: 3,
-        lastSeenAt: Date.now(),
-      };
-      state.players.push(player);
-      broadcastLobbyState(state.gameId, { ...state });
+    if (error || !data?.game_id) {
+      throw new Error(
+        error?.message || `Match with code "${cleanCode}" was not found or has expired.`
+      );
     }
 
     return {
-      gameId: state.gameId,
-      joinCode: state.joinCode,
-      hostProfileId: state.hostProfileId,
-      status: state.status,
-      settings: state.settings,
-      playZone: state.playZone,
-      myPlayerId: player.id,
-      myRole: player.role,
-      isHost: player.isHost,
+      gameId: data.game_id,
+      joinCode: data.join_code,
+      hostProfileId: '',
+      status: 'LOBBY',
+      settings: {
+        durationMinutes: 30,
+        headStartSeconds: 60,
+        locationPingIntervalSeconds: 30,
+        maxPlayers: 30,
+        runnerHearts: 3,
+        catchRadiusMeters: 15,
+      },
+      playZone: { type: 'circle', radiusMeters: 500 },
+      myPlayerId: data.player_id,
+      myRole: data.role || preferredRole,
+      isHost: !!data.is_host,
+      catchCode: data.catch_code,
     };
   }
 
+  /**
+   * Authoritative realtime subscription using Supabase postgres_changes channel.
+   */
   subscribeLobby(
     gameId: string,
-    onUpdate: (state: LobbyState) => void
+    onUpdate: (state: LobbyState) => void,
+    onError?: (error: Error) => void
   ): () => void {
-    // 1. Local room subscription
-    if (!subscribers.has(gameId)) {
-      subscribers.set(gameId, new Set());
-    }
-    const subs = subscribers.get(gameId)!;
-    subs.add(onUpdate);
+    // Initial fetch
+    this.refreshRemoteLobby(gameId, onUpdate).catch((err) => {
+      onError?.(err instanceof Error ? err : new Error(String(err)));
+    });
 
-    const initial = localRooms.get(gameId);
-    if (initial) {
-      onUpdate(initial);
-    }
-
-    // 2. Supabase Realtime channel subscription (when online)
+    // Supabase Realtime channel
     const channel = supabase.channel(`game:${gameId}`);
     channel
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'game_players', filter: `game_id=eq.${gameId}` },
         () => {
-          this.refreshRemoteLobby(gameId, onUpdate);
+          this.refreshRemoteLobby(gameId, onUpdate).catch(() => {});
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'games', filter: `id=eq.${gameId}` },
         () => {
-          this.refreshRemoteLobby(gameId, onUpdate);
+          this.refreshRemoteLobby(gameId, onUpdate).catch(() => {});
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          onError?.(new Error('Connection to match server lost. Reconnecting...'));
+        }
+      });
 
     return () => {
-      subs.delete(onUpdate);
-      if (subs.size === 0) {
-        subscribers.delete(gameId);
-      }
       channel.unsubscribe();
     };
   }
 
+  /**
+   * Updates player role on the server.
+   */
   async updatePlayerRole(
     gameId: string,
     targetPlayerId: string,
     newRole: PlayerRole
   ): Promise<void> {
-    const state = localRooms.get(gameId);
-    if (state) {
-      const p = state.players.find((pl) => pl.id === targetPlayerId);
-      if (p) {
-        p.role = newRole;
-        broadcastLobbyState(gameId, { ...state });
-      }
-    }
+    const { error } = await supabase
+      .from('game_players')
+      .update({ role: newRole })
+      .eq('id', targetPlayerId)
+      .eq('game_id', gameId);
 
-    try {
-      await supabase
-        .from('game_players')
-        .update({ role: newRole })
-        .eq('id', targetPlayerId)
-        .eq('game_id', gameId);
-    } catch {
-      // Handled
+    if (error) {
+      throw new Error(`Failed to update role: ${error.message}`);
     }
   }
 
+  /**
+   * Toggles ready status on the server.
+   */
   async toggleReadyStatus(
     gameId: string,
     playerId: string,
     isReady: boolean
   ): Promise<void> {
-    const state = localRooms.get(gameId);
-    if (state) {
-      const p = state.players.find((pl) => pl.id === playerId);
-      if (p) {
-        p.isReady = isReady;
-        broadcastLobbyState(gameId, { ...state });
-      }
-    }
+    const { error } = await supabase
+      .from('game_players')
+      .update({ is_ready: isReady })
+      .eq('id', playerId)
+      .eq('game_id', gameId);
 
-    try {
-      await supabase
-        .from('game_players')
-        .update({ is_ready: isReady })
-        .eq('id', playerId)
-        .eq('game_id', gameId);
-    } catch {
-      // Handled
+    if (error) {
+      throw new Error(`Failed to update readiness: ${error.message}`);
     }
   }
 
+  /**
+   * Authoritatively starts the match.
+   * Requires at least 1 Hunter and 1 Runner.
+   */
   async startMatch(gameId: string): Promise<void> {
-    const state = localRooms.get(gameId);
-    if (!state) {
-      throw new Error('Match not found');
+    // 1. Fetch current players from server to validate composition
+    const { data: players, error: fetchErr } = await supabase
+      .from('game_players')
+      .select('role')
+      .eq('game_id', gameId);
+
+    if (fetchErr || !players) {
+      throw new Error('Failed to verify match roster before starting.');
     }
 
-    // Authoritative rule validation: At least 1 Hunter and 1 Runner
-    const hunters = state.players.filter((p) => p.role === 'HUNTER');
-    const runners = state.players.filter((p) => p.role === 'RUNNER');
+    const hunters = players.filter((p) => p.role === 'HUNTER');
+    const runners = players.filter((p) => p.role === 'RUNNER');
 
     if (hunters.length < 1) {
       throw new Error('A match requires at least one Hunter before starting.');
@@ -340,87 +232,133 @@ class LobbyService {
       throw new Error('A match requires at least one Runner before starting.');
     }
 
-    state.status = 'COUNTDOWN';
-    broadcastLobbyState(gameId, { ...state });
+    // 2. Authoritatively transition game to COUNTDOWN
+    const { error } = await supabase
+      .from('games')
+      .update({ status: 'COUNTDOWN', started_at: new Date().toISOString() })
+      .eq('id', gameId);
 
-    try {
-      await supabase
-        .from('games')
-        .update({ status: 'COUNTDOWN', started_at: new Date().toISOString() })
-        .eq('id', gameId);
-    } catch {
-      // Handled
+    if (error) {
+      throw new Error(`Failed to start match: ${error.message}`);
     }
   }
 
+  /**
+   * Leaves the match and removes player from game_players table.
+   */
   async leaveMatch(gameId: string, playerId: string): Promise<void> {
-    const state = localRooms.get(gameId);
-    if (state) {
-      state.players = state.players.filter((p) => p.id !== playerId);
-      if (state.players.length === 0) {
-        localRooms.delete(gameId);
-        localRooms.delete(state.joinCode);
-      } else {
-        // If host left, elect new host
-        if (!state.players.some((p) => p.isHost)) {
-          state.players[0].isHost = true;
-          state.hostProfileId = state.players[0].profileId;
-        }
-        broadcastLobbyState(gameId, { ...state });
-      }
-    }
+    const { error } = await supabase
+      .from('game_players')
+      .delete()
+      .eq('id', playerId)
+      .eq('game_id', gameId);
 
-    try {
-      await supabase
-        .from('game_players')
-        .delete()
-        .eq('id', playerId)
-        .eq('game_id', gameId);
-    } catch {
-      // Handled
+    if (error) {
+      throw new Error(`Failed to leave match: ${error.message}`);
     }
   }
 
-  private async refreshRemoteLobby(
+  /**
+   * Authoritatively submits and verifies a 4-digit runner catch code.
+   * Uses atomic row locking (FOR UPDATE) in submit_catch_code RPC.
+   */
+  async submitCatchCode(
+    gameId: string,
+    hunterPlayerId: string,
+    catchCode: string,
+    hunterLat = 0,
+    hunterLng = 0
+  ): Promise<CatchSubmissionResult> {
+    const cleanCode = catchCode.trim();
+    if (cleanCode.length !== 4) {
+      return {
+        success: false,
+        message: 'Catch code must be exactly 4 digits.',
+      };
+    }
+
+    const { data, error } = await supabase.rpc('submit_catch_code', {
+      p_game_id: gameId,
+      p_hunter_player_id: hunterPlayerId,
+      p_catch_code: cleanCode,
+      p_hunter_lat: hunterLat,
+      p_hunter_lng: hunterLng,
+    });
+
+    if (error) {
+      return {
+        success: false,
+        message: error.message || 'Catch verification failed on server.',
+      };
+    }
+
+    return {
+      success: !!data?.success,
+      message: data?.message || (data?.success ? 'Catch confirmed by server!' : 'Invalid catch code.'),
+      runnerId: data?.runner_id,
+      heartsRemaining: data?.hearts_remaining,
+      isEliminated: data?.is_eliminated,
+      allRunnersEliminated: data?.all_runners_eliminated,
+    };
+  }
+
+  /**
+   * Refreshes lobby state from Supabase.
+   */
+  async refreshRemoteLobby(
     gameId: string,
     onUpdate: (state: LobbyState) => void
   ): Promise<void> {
-    try {
-      const { data: game } = await supabase.from('games').select('*').eq('id', gameId).single();
-      const { data: players } = await supabase
-        .from('game_players')
-        .select('*, profiles(display_name)')
-        .eq('game_id', gameId);
+    const { data: game, error: gameError } = await supabase
+      .from('games')
+      .select('*')
+      .eq('id', gameId)
+      .single();
 
-      if (game && players) {
-        const mappedPlayers: LobbyPlayer[] = players.map((p) => ({
-          id: p.id,
-          profileId: p.profile_id,
-          displayName: p.profiles?.display_name || 'Anonymous',
-          role: p.role,
-          status: p.status,
-          isReady: p.is_ready,
-          isHost: p.is_host,
-          heartsRemaining: p.hearts_remaining,
-          lastSeenAt: Date.now(),
-        }));
-
-        const state: LobbyState = {
-          gameId: game.id,
-          joinCode: game.join_code,
-          status: game.status as GameStatus,
-          settings: game.settings,
-          playZone: game.play_zone,
-          hostProfileId: game.host_profile_id,
-          players: mappedPlayers,
-        };
-
-        broadcastLobbyState(gameId, state);
-        onUpdate(state);
-      }
-    } catch {
-      // Handled
+    if (gameError || !game) {
+      throw new Error(gameError?.message || 'Game match not found on server.');
     }
+
+    const { data: players, error: playersError } = await supabase
+      .from('game_players')
+      .select('*, profiles(display_name)')
+      .eq('game_id', gameId);
+
+    if (playersError || !players) {
+      throw new Error(playersError?.message || 'Failed to fetch match players.');
+    }
+
+    const mappedPlayers: LobbyPlayer[] = players.map((p) => ({
+      id: p.id,
+      profileId: p.profile_id,
+      displayName: p.profiles?.display_name || 'Anonymous Operative',
+      role: p.role,
+      status: p.status,
+      isReady: p.is_ready,
+      isHost: p.is_host,
+      heartsRemaining: p.hearts_remaining,
+      catchCode: p.catch_code,
+      lastSeenAt: Date.now(),
+    }));
+
+    const state: LobbyState = {
+      gameId: game.id,
+      joinCode: game.join_code,
+      status: game.status as GameStatus,
+      settings: game.settings || {
+        durationMinutes: 30,
+        headStartSeconds: 60,
+        locationPingIntervalSeconds: 30,
+        maxPlayers: 30,
+        runnerHearts: 3,
+        catchRadiusMeters: 15,
+      },
+      playZone: game.play_zone || { type: 'circle', radiusMeters: 500 },
+      hostProfileId: game.host_profile_id,
+      players: mappedPlayers,
+    };
+
+    onUpdate(state);
   }
 }
 

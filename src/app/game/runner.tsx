@@ -15,6 +15,7 @@ import { TacticalRadarMap } from '@/components/game/TacticalRadarMap';
 import { useLocation } from '@/hooks/useLocation';
 import { pointInCircle } from '@/lib/geo/geofence';
 import { GameEngine } from '@/services/game/gameEngine';
+import { gameService } from '@/services/game/gameService';
 import { useLobbyStore } from '@/store/lobbyStore';
 import { AbilityType, ActiveEffect, HunterSnapshot } from '@/types/game';
 import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
@@ -26,11 +27,67 @@ export default function RunnerGameScreen() {
 
   const [activeEffects, setActiveEffects] = useState<ActiveEffect[]>([]);
   const [heartsRemaining, setHeartsRemaining] = useState(3);
+  const [liveHunterLocations, setLiveHunterLocations] = useState<Map<string, HunterSnapshot>>(
+    new Map()
+  );
   const [timeRemaining, setTimeRemaining] = useState(
     (lobbyState?.settings.durationMinutes ?? 30) * 60
   );
 
-  // Start continuous location tracking upon entering active gameplay
+  // My private 4-digit catch code
+  const me = lobbyState?.players.find((p) => p.id === session?.myPlayerId);
+  const myCatchCode = session?.catchCode || me?.catchCode || '----';
+
+  // Join live game communications channel
+  useEffect(() => {
+    if (!session?.gameId) return;
+
+    const unsubChannel = gameService.joinGameChannel(
+      session.gameId,
+      (broadcast) => {
+        if (broadcast.role === 'HUNTER') {
+          setLiveHunterLocations((prev) => {
+            const next = new Map(prev);
+            next.set(broadcast.playerId, {
+              playerId: broadcast.playerId,
+              displayName: broadcast.displayName,
+              latitude: broadcast.latitude,
+              longitude: broadcast.longitude,
+              measuredAt: broadcast.measuredAt,
+            });
+            return next;
+          });
+        }
+      },
+      (newEffect) => {
+        setActiveEffects((prev) => [...prev, newEffect]);
+      },
+      (catchPayload) => {
+        if (catchPayload?.runner_id === session.myPlayerId) {
+          const newHearts = catchPayload.hearts_left ?? 0;
+          setHeartsRemaining(newHearts);
+          if (catchPayload.eliminated) {
+            Alert.alert(
+              'ELIMINATED!',
+              'You have been caught by a Hunter and lost all hearts.',
+              [{ text: 'View Results', onPress: () => router.replace('/game/results') }]
+            );
+          } else {
+            Alert.alert(
+              'TAGGED!',
+              `A Hunter confirmed a catch! You have ${newHearts} heart(s) remaining.`
+            );
+          }
+        }
+      }
+    );
+
+    return () => {
+      unsubChannel();
+    };
+  }, [session?.gameId, session?.myPlayerId, router]);
+
+  // Start continuous location tracking and broadcast to live channel
   useEffect(() => {
     let cleanupTracking: (() => void) | undefined;
     startTracking({ timeIntervalMs: 1000, distanceIntervalMeters: 2 }).then(
@@ -44,6 +101,19 @@ export default function RunnerGameScreen() {
       stopTracking();
     };
   }, [startTracking, stopTracking]);
+
+  // Broadcast location when GPS updates
+  useEffect(() => {
+    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
+
+    gameService.broadcastLocation(
+      session.gameId,
+      session.myPlayerId,
+      'RUNNER',
+      me?.displayName || 'Runner',
+      currentLocation
+    );
+  }, [currentLocation, session?.gameId, session?.myPlayerId, me?.displayName]);
 
   // Match countdown timer
   useEffect(() => {
@@ -61,17 +131,7 @@ export default function RunnerGameScreen() {
     return () => clearInterval(timer);
   }, [router]);
 
-  // Hunters from lobby state
-  const hunters = (lobbyState?.players ?? []).filter((p) => p.role === 'HUNTER');
-
-  // Simulated / Real hunter location observations
-  const hunterSnapshots: HunterSnapshot[] = hunters.map((h, i) => ({
-    playerId: h.id,
-    displayName: h.displayName,
-    latitude: (currentLocation?.latitude ?? 37.7749) + 0.0004 * (i + 1),
-    longitude: (currentLocation?.longitude ?? -122.4194) + 0.0003 * (i + 1),
-    measuredAt: Date.now(),
-  }));
+  const hunterSnapshots = Array.from(liveHunterLocations.values());
 
   // Check if Map View ability is currently deployed
   const isMapViewActive = activeEffects.some(
@@ -111,13 +171,13 @@ export default function RunnerGameScreen() {
     ? pointInCircle(currentLocation, circleGeofence, 15)
     : { isInside: true, distanceToBoundaryMeters: 500, warningGraceActive: false };
 
-  const handleActivateAbility = (ability: AbilityType) => {
-    const me = lobbyState?.players.find((p) => p.id === session?.myPlayerId);
+  const handleActivateAbility = async (ability: AbilityType) => {
     if (!me) return;
 
     try {
       const effect = GameEngine.activateAbility(ability, me, activeEffects);
       setActiveEffects((prev) => [...prev, effect]);
+      await gameService.broadcastAbility(effect);
     } catch (err: unknown) {
       Alert.alert(
         'ABILITY ERROR',
@@ -166,6 +226,15 @@ export default function RunnerGameScreen() {
             ))}
           </View>
         </View>
+
+        {/* Official Hunting Game Catch-Code Card */}
+        <Card variant="runner" style={styles.catchCodeCard}>
+          <Text style={styles.catchCodeLabel}>YOUR SECRET CATCH CODE</Text>
+          <Text style={styles.catchCodeVal}>{myCatchCode}</Text>
+          <Text style={styles.catchCodeHelp}>
+            Only reveal this 4-digit code if a Hunter physically catches and tags you!
+          </Text>
+        </Card>
 
         {/* Boundary Grace Warning Banner */}
         {boundaryCheck.warningGraceActive && (
@@ -302,6 +371,32 @@ const styles = StyleSheet.create({
   heartLost: {
     color: colors.text.muted,
     opacity: 0.3,
+  },
+  catchCodeCard: {
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    borderColor: colors.runner.primary,
+    borderWidth: 1.5,
+  },
+  catchCodeLabel: {
+    color: colors.runner.primary,
+    fontSize: typography.fontSize.xs,
+    fontWeight: '800',
+    letterSpacing: 2,
+  },
+  catchCodeVal: {
+    color: colors.text.primary,
+    fontSize: 32,
+    fontWeight: '900',
+    letterSpacing: 8,
+    marginVertical: spacing.xs,
+  },
+  catchCodeHelp: {
+    color: colors.text.muted,
+    fontSize: 10,
+    textAlign: 'center',
+    paddingHorizontal: spacing.md,
   },
   boundaryWarning: {
     marginVertical: spacing.xs,

@@ -25,6 +25,7 @@ export interface LobbyPlayer {
   isReady: boolean;
   isHost: boolean;
   heartsRemaining: number;
+  catchCode?: string;
   lastSeenAt: number;
 }
 
@@ -53,6 +54,7 @@ export interface MatchSession {
   myPlayerId: string;
   myRole: PlayerRole;
   isHost: boolean;
+  catchCode?: string;
 }
 
 export interface LobbyState {

@@ -1,22 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Badge, Button, Card, ErrorFallback } from '@/components/ui';
+import { Badge, Button, Card } from '@/components/ui';
 import { AbilityPanel } from '@/components/game/AbilityPanel';
 import { TacticalRadarMap } from '@/components/game/TacticalRadarMap';
 import { useLocation } from '@/hooks/useLocation';
 import { GameEngine } from '@/services/game/gameEngine';
+import { gameService } from '@/services/game/gameService';
+import { lobbyService } from '@/services/lobby/lobbyService';
 import { useLobbyStore } from '@/store/lobbyStore';
 import { AbilityType, ActiveEffect, RunnerSnapshot } from '@/types/game';
-import { LobbyPlayer } from '@/types/lobby';
 import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
 
 export default function HunterGameScreen() {
@@ -27,11 +30,65 @@ export default function HunterGameScreen() {
   const [activeEffects, setActiveEffects] = useState<ActiveEffect[]>([]);
   const [selectedRunner, setSelectedRunner] = useState<RunnerSnapshot | null>(null);
   const [catchFeedback, setCatchFeedback] = useState<string | null>(null);
+  const [liveRunnerLocations, setLiveRunnerLocations] = useState<Map<string, RunnerSnapshot>>(
+    new Map()
+  );
   const [timeRemaining, setTimeRemaining] = useState(
     (lobbyState?.settings.durationMinutes ?? 30) * 60
   );
 
-  // Start continuous location tracking upon entering active gameplay
+  // Catch Code Verification Modal State
+  const [showCatchModal, setShowCatchModal] = useState(false);
+  const [enteredCatchCode, setEnteredCatchCode] = useState('');
+  const [isSubmittingCatch, setIsSubmittingCatch] = useState(false);
+
+  const me = lobbyState?.players.find((p) => p.id === session?.myPlayerId);
+
+  // Join live game communications channel
+  useEffect(() => {
+    if (!session?.gameId) return;
+
+    const unsubChannel = gameService.joinGameChannel(
+      session.gameId,
+      (broadcast) => {
+        if (broadcast.role === 'RUNNER') {
+          setLiveRunnerLocations((prev) => {
+            const next = new Map(prev);
+            next.set(broadcast.playerId, {
+              playerId: broadcast.playerId,
+              displayName: broadcast.displayName,
+              latitude: broadcast.latitude,
+              longitude: broadcast.longitude,
+              accuracy: broadcast.accuracy,
+              measuredAt: broadcast.measuredAt,
+            });
+            return next;
+          });
+        }
+      },
+      (newEffect) => {
+        setActiveEffects((prev) => [...prev, newEffect]);
+      },
+      (catchPayload) => {
+        setCatchFeedback(
+          catchPayload.eliminated
+            ? `RUNNER ELIMINATED! A runner lost their final heart!`
+            : `TAG CONFIRMED! Target runner lost 1 heart.`
+        );
+        if (catchPayload.all_runners_eliminated) {
+          Alert.alert('VICTORY!', 'All runners eliminated! Hunters win!', [
+            { text: 'View Results', onPress: () => router.replace('/game/results') },
+          ]);
+        }
+      }
+    );
+
+    return () => {
+      unsubChannel();
+    };
+  }, [session?.gameId, router]);
+
+  // Start continuous location tracking and broadcast to live channel
   useEffect(() => {
     let cleanupTracking: (() => void) | undefined;
     startTracking({ timeIntervalMs: 1000, distanceIntervalMeters: 2 }).then(
@@ -45,6 +102,19 @@ export default function HunterGameScreen() {
       stopTracking();
     };
   }, [startTracking, stopTracking]);
+
+  // Broadcast location when GPS updates
+  useEffect(() => {
+    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
+
+    gameService.broadcastLocation(
+      session.gameId,
+      session.myPlayerId,
+      'HUNTER',
+      me?.displayName || 'Hunter',
+      currentLocation
+    );
+  }, [currentLocation, session?.gameId, session?.myPlayerId, me?.displayName]);
 
   // Match countdown timer
   useEffect(() => {
@@ -68,69 +138,84 @@ export default function HunterGameScreen() {
     (p) => p.status === 'ALIVE' && p.heartsRemaining > 0
   );
 
-  // Generate mock/real runner locations for radar display (respecting Stealth)
-  const visibleRunners: RunnerSnapshot[] = GameEngine.filterVisibleRunners(
-    livingRunners.map((r, i) => ({
-      player: r,
-      location: {
-        latitude: (currentLocation?.latitude ?? 37.7749) + 0.00015 * (i + 1),
-        longitude: (currentLocation?.longitude ?? -122.4194) + 0.0001 * (i + 1),
-        measuredAt: Date.now(),
-      },
-    })),
-    activeEffects
-  );
-
-  // Check if any runner is within the 15m catch trigger threshold
-  const nearestCatchable = visibleRunners.find((r) => {
-    if (!currentLocation) return false;
-    const res = GameEngine.processCatch(
-      currentLocation,
-      { latitude: r.latitude, longitude: r.longitude },
-      allRunners.find((p) => p.id === r.playerId)!,
-      livingRunners
+  // Filter real runner telemetry according to stealth and radar visibility
+  const rawRunnerSnapshots = Array.from(liveRunnerLocations.values());
+  const visibleRunners: RunnerSnapshot[] = rawRunnerSnapshots.filter((runner) => {
+    const now = Date.now();
+    const hasStealth = activeEffects.some(
+      (e) => e.actorPlayerId === runner.playerId && e.ability === 'STEALTH' && e.expiresAt > now
     );
-    return res.distanceMeters <= 20; // 15m + 5m variance
+    return !hasStealth;
   });
 
-  const handleCatch = () => {
-    if (!currentLocation || !nearestCatchable) return;
-    const target = allRunners.find((p) => p.id === nearestCatchable.playerId);
-    if (!target) return;
+  const handleOpenCatchModal = () => {
+    setEnteredCatchCode('');
+    setShowCatchModal(true);
+  };
 
-    const result = GameEngine.processCatch(
-      currentLocation,
-      { latitude: nearestCatchable.latitude, longitude: nearestCatchable.longitude },
-      target,
-      livingRunners
-    );
+  const handleSubmitCatchCode = async () => {
+    if (!session?.gameId || !session?.myPlayerId) return;
 
-    if (result.success) {
-      setCatchFeedback(result.message);
-      target.heartsRemaining = result.heartsRemaining;
-      if (result.isEliminated) {
-        target.status = 'CAUGHT';
+    const code = enteredCatchCode.trim();
+    if (code.length !== 4) {
+      Alert.alert('INVALID CODE', 'Please enter a valid 4-digit catch code.');
+      return;
+    }
+
+    setIsSubmittingCatch(true);
+    try {
+      const result = await lobbyService.submitCatchCode(
+        session.gameId,
+        session.myPlayerId,
+        code,
+        currentLocation?.latitude ?? 0,
+        currentLocation?.longitude ?? 0
+      );
+
+      setIsSubmittingCatch(false);
+
+      if (result.success) {
+        setShowCatchModal(false);
+        setCatchFeedback(result.message);
+
+        // Broadcast catch event across Realtime channel
+        await gameService.broadcastCatchEvent({
+          hunter_id: session.myPlayerId,
+          runner_id: result.runnerId,
+          hearts_left: result.heartsRemaining,
+          eliminated: result.isEliminated,
+          all_runners_eliminated: result.allRunnersEliminated,
+        });
+
+        if (result.allRunnersEliminated) {
+          Alert.alert('VICTORY!', 'All runners eliminated! Hunters win!', [
+            { text: 'View Results', onPress: () => router.replace('/game/results') },
+          ]);
+        } else {
+          Alert.alert(
+            result.isEliminated ? 'TARGET ELIMINATED!' : 'CATCH CONFIRMED!',
+            result.message
+          );
+        }
+      } else {
+        Alert.alert('VERIFICATION FAILED', result.message);
       }
-
-      // Check win condition
-      const remaining = livingRunners.filter((p) => p.id !== target.id);
-      if (remaining.length === 0) {
-        Alert.alert('VICTORY!', 'All runners have been eliminated! Hunters win!', [
-          { text: 'View Results', onPress: () => router.replace('/game/results') },
-        ]);
-      }
-    } else {
-      Alert.alert('CATCH FAILED', result.message);
+    } catch (err: unknown) {
+      setIsSubmittingCatch(false);
+      Alert.alert(
+        'SERVER ERROR',
+        err instanceof Error ? err.message : 'Failed to reach game server.'
+      );
     }
   };
 
-  const handleActivateAbility = (ability: AbilityType) => {
-    const me = lobbyState?.players.find((p) => p.id === session?.myPlayerId);
+  const handleActivateAbility = async (ability: AbilityType) => {
     if (!me) return;
 
     try {
       const effect = GameEngine.activateAbility(ability, me, activeEffects);
       setActiveEffects((prev) => [...prev, effect]);
+      await gameService.broadcastAbility(effect);
     } catch (err: unknown) {
       Alert.alert(
         'ABILITY ERROR',
@@ -192,28 +277,21 @@ export default function HunterGameScreen() {
           onSelectRunner={setSelectedRunner}
         />
 
-        {/* Proximity Catch Action Button */}
-        {nearestCatchable ? (
-          <View style={styles.catchPromptContainer}>
-            <Text style={styles.catchPromptText}>
-              TARGET IN PROXIMITY ({nearestCatchable.displayName})
-            </Text>
-            <Button
-              title="CONFIRM CATCH"
-              variant="danger"
-              size="lg"
-              fullWidth
-              onPress={handleCatch}
-              style={styles.catchBtn}
-            />
-          </View>
-        ) : (
-          <View style={styles.noCatchBox}>
-            <Text style={styles.noCatchText}>
-              GET WITHIN 15m OF A RUNNER TO INITIATE CATCH
-            </Text>
-          </View>
-        )}
+        {/* Primary Hunting Game Catch-Code Verification Trigger */}
+        <View style={styles.catchActionCard}>
+          <Text style={styles.catchActionTitle}>PHYSICAL CATCH CONFIRMATION</Text>
+          <Text style={styles.catchActionSubtitle}>
+            When you physically catch/tag a runner, obtain their secret 4-digit code to confirm elimination.
+          </Text>
+          <Button
+            title="VERIFY RUNNER CATCH CODE"
+            variant="danger"
+            size="lg"
+            fullWidth
+            onPress={handleOpenCatchModal}
+            style={styles.catchBtn}
+          />
+        </View>
 
         {/* Catch Confirmation Banner */}
         {catchFeedback && (
@@ -229,6 +307,50 @@ export default function HunterGameScreen() {
           onActivate={handleActivateAbility}
         />
       </ScrollView>
+
+      {/* Catch Code Verification Modal */}
+      <Modal
+        visible={showCatchModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCatchModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>ENTER RUNNER CATCH CODE</Text>
+            <Text style={styles.modalSubtitle}>
+              Ask the captured runner for their 4-digit code:
+            </Text>
+
+            <TextInput
+              style={styles.codeInput}
+              placeholder="4-digit code"
+              placeholderTextColor={colors.text.muted}
+              keyboardType="number-pad"
+              maxLength={4}
+              value={enteredCatchCode}
+              onChangeText={setEnteredCatchCode}
+              autoFocus
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setShowCatchModal(false)}
+              >
+                <Text style={styles.modalCancelText}>CANCEL</Text>
+              </TouchableOpacity>
+              <Button
+                title={isSubmittingCatch ? 'VERIFYING...' : 'CONFIRM CATCH'}
+                variant="danger"
+                size="md"
+                onPress={handleSubmitCatchCode}
+                disabled={isSubmittingCatch || enteredCatchCode.trim().length !== 4}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -304,36 +426,30 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 2,
   },
-  catchPromptContainer: {
+  catchActionCard: {
     marginVertical: spacing.sm,
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
     borderColor: colors.status.danger,
     borderWidth: 1.5,
     borderRadius: borderRadius.md,
     padding: spacing.md,
-    alignItems: 'center',
   },
-  catchPromptText: {
+  catchActionTitle: {
     color: colors.status.danger,
     fontSize: typography.fontSize.xs,
     fontWeight: '800',
     letterSpacing: 1.5,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  catchActionSubtitle: {
+    color: colors.text.secondary,
+    fontSize: 11,
+    textAlign: 'center',
     marginBottom: spacing.sm,
   },
   catchBtn: {
     marginTop: 2,
-  },
-  noCatchBox: {
-    marginVertical: spacing.sm,
-    padding: spacing.sm,
-    backgroundColor: colors.background.surface,
-    borderRadius: borderRadius.sm,
-    alignItems: 'center',
-  },
-  noCatchText: {
-    color: colors.text.muted,
-    fontSize: 10,
-    letterSpacing: 1,
   },
   feedbackCard: {
     marginVertical: spacing.xs,
@@ -345,5 +461,65 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.xs,
     fontWeight: '700',
     textAlign: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.lg,
+  },
+  modalContent: {
+    backgroundColor: colors.background.surface,
+    borderColor: colors.hunter.primary,
+    borderWidth: 1.5,
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    color: colors.hunter.primary,
+    fontSize: typography.fontSize.sm,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginBottom: spacing.xs,
+  },
+  modalSubtitle: {
+    color: colors.text.secondary,
+    fontSize: typography.fontSize.xs,
+    textAlign: 'center',
+    marginBottom: spacing.md,
+  },
+  codeInput: {
+    backgroundColor: colors.background.base,
+    borderColor: colors.border.active,
+    borderWidth: 1.5,
+    borderRadius: borderRadius.sm,
+    color: colors.text.primary,
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: 8,
+    textAlign: 'center',
+    width: 200,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    alignItems: 'center',
+  },
+  modalCancelBtn: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  modalCancelText: {
+    color: colors.text.muted,
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 1,
   },
 });
