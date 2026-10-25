@@ -11,7 +11,8 @@ export type BadgeVariant =
   | 'danger'
   | 'fresh'
   | 'stale'
-  | 'neutral';
+  | 'neutral'
+  | 'gradient';
 
 interface BadgeProps {
   label: string;
@@ -30,43 +31,75 @@ export const Badge: React.FC<BadgeProps> = ({
     switch (variant) {
       case 'hunter':
         return {
-          container: { backgroundColor: 'rgba(0, 240, 255, 0.15)', borderColor: colors.hunter.primary },
+          container: {
+            backgroundColor: 'rgba(232, 93, 59, 0.15)',
+            borderColor: colors.hunter.primary,
+          },
           text: { color: colors.hunter.primary },
         };
       case 'runner':
         return {
-          container: { backgroundColor: 'rgba(255, 158, 0, 0.15)', borderColor: colors.runner.primary },
+          container: {
+            backgroundColor: 'rgba(0, 229, 255, 0.15)',
+            borderColor: colors.runner.primary,
+          },
           text: { color: colors.runner.primary },
         };
       case 'referee':
         return {
-          container: { backgroundColor: 'rgba(168, 85, 247, 0.15)', borderColor: colors.referee.primary },
+          container: {
+            backgroundColor: 'rgba(168, 85, 247, 0.15)',
+            borderColor: colors.referee.primary,
+          },
           text: { color: colors.referee.primary },
         };
       case 'safe':
       case 'fresh':
         return {
-          container: { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: colors.status.safe },
+          container: {
+            backgroundColor: 'rgba(16, 185, 129, 0.15)',
+            borderColor: colors.status.safe,
+          },
           text: { color: colors.status.safe },
         };
       case 'warning':
         return {
-          container: { backgroundColor: 'rgba(245, 158, 11, 0.15)', borderColor: colors.status.warning },
+          container: {
+            backgroundColor: 'rgba(245, 158, 11, 0.15)',
+            borderColor: colors.status.warning,
+          },
           text: { color: colors.status.warning },
         };
       case 'danger':
         return {
-          container: { backgroundColor: 'rgba(239, 68, 68, 0.15)', borderColor: colors.status.danger },
+          container: {
+            backgroundColor: 'rgba(239, 68, 68, 0.15)',
+            borderColor: colors.status.danger,
+          },
           text: { color: colors.status.danger },
+        };
+      case 'gradient':
+        return {
+          container: {
+            backgroundColor: 'rgba(232, 93, 59, 0.2)',
+            borderColor: colors.brand.gradientMid,
+          },
+          text: { color: colors.brand.gradientEnd },
         };
       case 'stale':
         return {
-          container: { backgroundColor: 'rgba(100, 116, 139, 0.2)', borderColor: colors.status.neutral },
+          container: {
+            backgroundColor: 'rgba(113, 113, 122, 0.2)',
+            borderColor: colors.status.neutral,
+          },
           text: { color: colors.text.muted },
         };
       default:
         return {
-          container: { backgroundColor: 'rgba(100, 116, 139, 0.15)', borderColor: colors.border.subtle },
+          container: {
+            backgroundColor: 'rgba(255, 255, 255, 0.08)',
+            borderColor: colors.border.glass,
+          },
           text: { color: colors.text.secondary },
         };
     }
@@ -83,15 +116,16 @@ export const Badge: React.FC<BadgeProps> = ({
 
 const styles = StyleSheet.create({
   base: {
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: spacing.sm + 4,
     paddingVertical: spacing.xs,
-    borderRadius: borderRadius.sm,
+    borderRadius: borderRadius.full,
     borderWidth: 1,
     alignSelf: 'flex-start',
   },
   text: {
     fontSize: typography.fontSize.xs,
-    fontWeight: '700',
-    letterSpacing: typography.letterSpacing.tactical,
+    fontWeight: '800',
+    letterSpacing: typography.letterSpacing.tight,
   },
 });
+

@@ -24,6 +24,8 @@ export class ExpoLocationService implements ILocationService {
 
   async requestPermissions(): Promise<LocationPermissionStatus> {
     try {
+      // Ensure Android high-accuracy fused location provider is enabled
+      await Location.enableNetworkProviderAsync().catch(() => {});
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === Location.PermissionStatus.GRANTED) return 'granted';
       if (status === Location.PermissionStatus.DENIED) return 'denied';
@@ -40,15 +42,32 @@ export class ExpoLocationService implements ILocationService {
     }
 
     try {
+      // Attempt Android high accuracy provider enablement
+      await Location.enableNetworkProviderAsync().catch(() => {});
+
+      // Use highest precision available on hardware (BestForNavigation)
       const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
+        accuracy: Location.Accuracy.BestForNavigation,
       });
 
       return this.mapExpoLocation(location);
     } catch {
+      // Fallback to recent high-accuracy cached fix if satellite lock is resolving
+      try {
+        const lastKnown = await Location.getLastKnownPositionAsync({
+          maxAge: 30000,
+          requiredAccuracy: 50,
+        });
+        if (lastKnown) {
+          return this.mapExpoLocation(lastKnown);
+        }
+      } catch {
+        // Ignore fallback error
+      }
       return null;
     }
   }
+
 
   async startTracking(
     options: TrackingOptions,

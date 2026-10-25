@@ -92,8 +92,8 @@ export default function MatchResultsScreen() {
 
         {/* Return Button */}
         <Button
-          title="RETURN TO HEADQUARTERS"
-          variant="primary"
+          title="RETURN TO HOME"
+          variant="gradient"
           size="lg"
           fullWidth
           onPress={handleReturnHome}
@@ -103,6 +103,7 @@ export default function MatchResultsScreen() {
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   safeArea: {

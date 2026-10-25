@@ -29,3 +29,12 @@ Thumbs.db
 
 expo-env.d.ts
 # @end expo-cli
+
+# Test screenshots, temporary images & scripts
+*.png
+*.jpg
+*.jpeg
+!assets/*.png
+!assets/*.jpg
+scripts/
+*.bat

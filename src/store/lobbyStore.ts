@@ -6,6 +6,7 @@ import {
   PlayerRole,
 } from '@/types/lobby';
 import { CreateMatchOptions, lobbyService } from '@/services/lobby/lobbyService';
+import { sessionManager, PersistedMatchSession } from '@/services/session/sessionManager';
 
 interface LobbyStoreState {
   session: MatchSession | null;
@@ -20,6 +21,7 @@ interface LobbyStoreState {
   toggleReady: () => Promise<void>;
   startMatch: () => Promise<void>;
   leaveMatch: () => Promise<void>;
+  restoreSession: (persisted: PersistedMatchSession) => void;
   clearError: () => void;
 }
 
@@ -34,6 +36,19 @@ export const useLobbyStore = create<LobbyStoreState>((set, get) => ({
     try {
       const session = await lobbyService.createMatch(options);
       set({ session, isLoading: false });
+
+      await sessionManager.saveActiveSession({
+        gameId: session.gameId,
+        joinCode: session.joinCode,
+        myPlayerId: session.myPlayerId,
+        myRole: session.myRole,
+        isHost: true,
+        route: `/lobby/${session.gameId}`,
+        savedAt: Date.now(),
+        durationMinutes: options?.durationMinutes ?? 30,
+        runnerHearts: options?.runnerHearts ?? 3,
+      });
+
       return session;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to create match';
@@ -47,6 +62,19 @@ export const useLobbyStore = create<LobbyStoreState>((set, get) => ({
     try {
       const session = await lobbyService.joinMatch(joinCode, preferredRole);
       set({ session, isLoading: false });
+
+      await sessionManager.saveActiveSession({
+        gameId: session.gameId,
+        joinCode: session.joinCode,
+        myPlayerId: session.myPlayerId,
+        myRole: session.myRole,
+        isHost: false,
+        route: `/lobby/${session.gameId}`,
+        savedAt: Date.now(),
+        durationMinutes: session.settings.durationMinutes,
+        catchCode: session.catchCode,
+      });
+
       return session;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to join match';
@@ -77,8 +105,22 @@ export const useLobbyStore = create<LobbyStoreState>((set, get) => ({
   },
 
   updateRole: async (targetPlayerId: string, newRole: PlayerRole) => {
-    const { session } = get();
+    const { session, lobbyState } = get();
     if (!session) return;
+
+    // Optimistic UI update so room owner sees instant visual feedback
+    if (lobbyState) {
+      const updatedPlayers = lobbyState.players.map((p) =>
+        p.id === targetPlayerId ? { ...p, role: newRole } : p
+      );
+      set({
+        lobbyState: {
+          ...lobbyState,
+          players: updatedPlayers,
+        },
+      });
+    }
+
     try {
       await lobbyService.updatePlayerRole(session.gameId, targetPlayerId, newRole);
     } catch (err: unknown) {
@@ -107,6 +149,20 @@ export const useLobbyStore = create<LobbyStoreState>((set, get) => ({
     try {
       await lobbyService.startMatch(session.gameId);
       set({ isLoading: false });
+
+      // Update persisted session route to live game
+      const targetRoute = session.myRole === 'RUNNER' ? '/game/runner' : '/game/hunter';
+      await sessionManager.saveActiveSession({
+        gameId: session.gameId,
+        joinCode: session.joinCode,
+        myPlayerId: session.myPlayerId,
+        myRole: session.myRole,
+        isHost: session.isHost,
+        route: targetRoute,
+        savedAt: Date.now(),
+        durationMinutes: session.settings.durationMinutes,
+        catchCode: session.catchCode,
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start match';
       set({ error: msg, isLoading: false });
@@ -120,8 +176,36 @@ export const useLobbyStore = create<LobbyStoreState>((set, get) => ({
     try {
       await lobbyService.leaveMatch(session.gameId, session.myPlayerId);
     } finally {
+      await sessionManager.clearActiveSession();
       set({ session: null, lobbyState: null });
     }
+  },
+
+  restoreSession: (persisted: PersistedMatchSession) => {
+    set({
+      session: {
+        gameId: persisted.gameId,
+        joinCode: persisted.joinCode,
+        hostProfileId: '',
+        status: 'ACTIVE',
+        settings: {
+          durationMinutes: persisted.durationMinutes,
+          headStartSeconds: 60,
+          locationPingIntervalSeconds: 30,
+          maxPlayers: 30,
+          runnerHearts: persisted.runnerHearts ?? 3,
+          catchRadiusMeters: 15,
+        },
+        playZone: {
+          type: 'circle',
+          radiusMeters: 500,
+        },
+        myPlayerId: persisted.myPlayerId,
+        myRole: persisted.myRole,
+        isHost: persisted.isHost,
+        catchCode: persisted.catchCode,
+      },
+    });
   },
 
   clearError: () => set({ error: null }),

@@ -8,8 +8,16 @@ import {
   ViewStyle,
 } from 'react-native';
 import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
+import { GradientView } from './GradientView';
 
-export type ButtonVariant = 'hunter' | 'runner' | 'primary' | 'secondary' | 'danger' | 'ghost';
+export type ButtonVariant =
+  | 'gradient'
+  | 'hunter'
+  | 'runner'
+  | 'primary'
+  | 'secondary'
+  | 'danger'
+  | 'ghost';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps {
@@ -28,7 +36,7 @@ interface ButtonProps {
 export const Button: React.FC<ButtonProps> = ({
   title,
   onPress,
-  variant = 'primary',
+  variant = 'gradient',
   size = 'md',
   disabled = false,
   loading = false,
@@ -66,15 +74,49 @@ export const Button: React.FC<ButtonProps> = ({
     if (size === 'md') list.push(styles.textMd);
     if (size === 'lg') list.push(styles.textLg);
 
-    if (variant === 'hunter') list.push(styles.textHunter);
     if (variant === 'runner') list.push(styles.textRunner);
     if (variant === 'secondary') list.push(styles.textSecondary);
     if (variant === 'ghost') list.push(styles.textGhost);
-    if (variant === 'danger') list.push(styles.textDanger);
+    if (variant === 'gradient' || variant === 'hunter' || variant === 'danger') {
+      list.push(styles.textWhite);
+    }
 
     if (textStyle) list.push(textStyle);
     return list;
   };
+
+  const content = loading ? (
+    <ActivityIndicator
+      size="small"
+      color={variant === 'runner' ? '#000' : '#FFF'}
+    />
+  ) : (
+    <>
+      {icon}
+      <Text style={getTextStyle()}>{title.toUpperCase()}</Text>
+    </>
+  );
+
+  if (variant === 'gradient') {
+    const sizeStyle =
+      size === 'sm' ? styles.sizeSm : size === 'lg' ? styles.sizeLg : styles.sizeMd;
+    return (
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={onPress}
+        disabled={disabled || loading}
+        style={[styles.gradientWrapper, fullWidth && styles.fullWidth, (disabled || loading) && styles.disabled, style]}
+      >
+        <GradientView
+          colors={colors.brand.gradient}
+          borderRadius={borderRadius.md}
+          style={[styles.gradientInner, sizeStyle]}
+        >
+          {content}
+        </GradientView>
+      </TouchableOpacity>
+    );
+  }
 
   return (
     <TouchableOpacity
@@ -83,17 +125,7 @@ export const Button: React.FC<ButtonProps> = ({
       disabled={disabled || loading}
       style={getContainerStyles()}
     >
-      {loading ? (
-        <ActivityIndicator
-          size="small"
-          color={variant === 'hunter' || variant === 'runner' ? '#000' : '#FFF'}
-        />
-      ) : (
-        <>
-          {icon}
-          <Text style={getTextStyle()}>{title.toUpperCase()}</Text>
-        </>
-      )}
+      {content}
     </TouchableOpacity>
   );
 };
@@ -107,6 +139,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'transparent',
   },
+  gradientWrapper: {
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+  },
+  gradientInner: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: borderRadius.md,
+  },
   fullWidth: {
     width: '100%',
   },
@@ -115,7 +158,7 @@ const styles = StyleSheet.create({
   },
   // Sizes
   sizeSm: {
-    paddingVertical: spacing.xs + 2,
+    paddingVertical: spacing.xs + 3,
     paddingHorizontal: spacing.md,
   },
   sizeMd: {
@@ -123,7 +166,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   sizeLg: {
-    paddingVertical: spacing.lg - 2,
+    paddingVertical: spacing.md + 4,
     paddingHorizontal: spacing.xl,
   },
   // Variants
@@ -140,8 +183,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border.active,
   },
   variantSecondary: {
-    backgroundColor: 'transparent',
-    borderColor: colors.border.subtle,
+    backgroundColor: colors.background.surfaceCard,
+    borderColor: colors.border.glass,
   },
   variantDanger: {
     backgroundColor: colors.status.danger,
@@ -153,7 +196,7 @@ const styles = StyleSheet.create({
   },
   // Texts
   baseText: {
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: typography.letterSpacing.tactical,
     textAlign: 'center',
     color: colors.text.primary,
@@ -167,19 +210,17 @@ const styles = StyleSheet.create({
   textLg: {
     fontSize: typography.fontSize.lg,
   },
-  textHunter: {
-    color: colors.hunter.contrastText,
+  textWhite: {
+    color: '#FFFFFF',
   },
   textRunner: {
     color: colors.runner.contrastText,
   },
   textSecondary: {
-    color: colors.text.secondary,
+    color: colors.text.primary,
   },
   textGhost: {
     color: colors.text.muted,
   },
-  textDanger: {
-    color: '#FFF',
-  },
 });
+

@@ -6,12 +6,14 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "manhunt",
+    "icon": "./assets/icon.png",
     "splash": {
       "backgroundColor": "#0B0E14"
     },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.manhunt.gpsmanhunt",
+      "icon": "./assets/icon.png",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "GPS Manhunt requires your location to position you on the game field and calculate directions during an active match.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "GPS Manhunt requires background location while a match is actively running to allow you to play with your device in your pocket.",
@@ -22,6 +24,7 @@
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0B0E14"
       },
       "package": "com.manhunt.gpsmanhunt",

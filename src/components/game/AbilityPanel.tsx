@@ -43,6 +43,7 @@ export const AbilityPanel: React.FC<AbilityPanelProps> = ({
 
   const renderAbilityButton = (
     ability: AbilityType,
+    icon: string,
     title: string,
     sub: string,
     accentColor: string
@@ -55,23 +56,24 @@ export const AbilityPanel: React.FC<AbilityPanelProps> = ({
     return (
       <TouchableOpacity
         key={ability}
-        activeOpacity={0.7}
+        activeOpacity={0.75}
         disabled={isOnCooldown || isActive}
         style={[
           styles.abilityBtn,
-          isActive && { borderColor: accentColor, backgroundColor: 'rgba(0, 240, 255, 0.15)' },
+          isActive && { borderColor: accentColor, backgroundColor: 'rgba(232, 93, 59, 0.2)' },
           isOnCooldown && styles.abilityBtnCooldown,
         ]}
         onPress={() => onActivate(ability)}
       >
-        <Text style={[styles.abilityTitle, { color: accentColor }]}>
+        <Text style={styles.abilityIcon}>{icon}</Text>
+        <Text style={[styles.abilityTitle, { color: isActive ? accentColor : colors.text.primary }]}>
           {title.toUpperCase()}
         </Text>
-        <Text style={styles.abilityStatus}>
+        <Text style={[styles.abilityStatus, isActive && { color: accentColor }]}>
           {isActive
-            ? `ACTIVE (${activeSec}s)`
+            ? `ACTIVE ${activeSec}s`
             : isOnCooldown
-            ? `WAIT (${cooldownSec}s)`
+            ? `${cooldownSec}s`
             : sub}
         </Text>
       </TouchableOpacity>
@@ -84,17 +86,17 @@ export const AbilityPanel: React.FC<AbilityPanelProps> = ({
       <View style={styles.row}>
         {role === 'RUNNER' && (
           <>
-            {renderAbilityButton('STEALTH', 'STEALTH', 'HIDE 45s', colors.runner.primary)}
-            {renderAbilityButton('MAP_VIEW', 'MAP VIEW', 'SCAN 15s', colors.hunter.primary)}
-            {renderAbilityButton('BLIND', 'JAMMER', 'BLIND 20s', colors.referee.primary)}
+            {renderAbilityButton('STEALTH', '👻', 'STEALTH', '45s CLOAK', colors.runner.primary)}
+            {renderAbilityButton('MAP_VIEW', '🗺️', 'MAP SCAN', '15s REVEAL', colors.hunter.primary)}
+            {renderAbilityButton('BLIND', '⚡', 'JAMMER', '20s BLIND', colors.referee.primary)}
           </>
         )}
 
         {role === 'HUNTER' && (
           <>
-            {renderAbilityButton('PING', 'RADAR PING', 'REFRESH', colors.hunter.primary)}
-            {renderAbilityButton('BLIND', 'RADAR JAM', 'BLIND 20s', colors.referee.primary)}
-            {renderAbilityButton('DECOY', 'DECOY PING', 'SPOOF', colors.runner.primary)}
+            {renderAbilityButton('PING', '📡', 'RADAR PING', 'REFRESH', colors.hunter.primary)}
+            {renderAbilityButton('BLIND', '⚡', 'JAMMER', '20s BLIND', colors.referee.primary)}
+            {renderAbilityButton('DECOY', '🎯', 'DECOY', 'SPOOF PING', colors.runner.primary)}
           </>
         )}
 
@@ -111,35 +113,42 @@ export const AbilityPanel: React.FC<AbilityPanelProps> = ({
 const styles = StyleSheet.create({
   container: {
     marginVertical: spacing.sm,
-    backgroundColor: colors.background.surface,
-    padding: spacing.sm,
-    borderRadius: borderRadius.md,
-    borderColor: colors.border.subtle,
+    backgroundColor: colors.background.surfaceCard,
+    padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    borderColor: colors.border.glass,
     borderWidth: 1,
   },
   panelHeader: {
     color: colors.text.muted,
-    fontSize: 9,
+    fontSize: 10,
     letterSpacing: 1.5,
     fontWeight: '800',
-    marginBottom: spacing.xs,
+    marginBottom: spacing.xs + 2,
+    textAlign: 'center',
   },
   row: {
     flexDirection: 'row',
-    gap: spacing.xs,
+    gap: spacing.sm,
   },
   abilityBtn: {
     flex: 1,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.sm + 2,
     paddingHorizontal: 4,
-    backgroundColor: colors.background.elevated,
-    borderColor: colors.border.active,
-    borderWidth: 1,
-    borderRadius: borderRadius.sm,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderWidth: 1.5,
+    borderRadius: borderRadius.md,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   abilityBtnCooldown: {
-    opacity: 0.45,
+    opacity: 0.4,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  abilityIcon: {
+    fontSize: 20,
+    marginBottom: 2,
   },
   abilityTitle: {
     fontSize: 11,
@@ -149,13 +158,16 @@ const styles = StyleSheet.create({
   abilityStatus: {
     color: colors.text.muted,
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '800',
     marginTop: 2,
+    letterSpacing: 0.5,
   },
   refereeNotice: {
     color: colors.referee.primary,
     fontSize: typography.fontSize.xs,
     fontStyle: 'italic',
     padding: spacing.xs,
+    textAlign: 'center',
   },
 });
+

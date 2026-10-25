@@ -30,7 +30,8 @@ class GameService {
     gameId: string,
     onLocationReceived: (data: PlayerLocationBroadcast) => void,
     onAbilityActivated: (effect: ActiveEffect) => void,
-    onCatchEvent: (payload: any) => void
+    onCatchEvent: (payload: any) => void,
+    onConnectionError?: (err: Error) => void
   ): () => void {
     if (this.channel) {
       this.channel.unsubscribe();
@@ -59,7 +60,11 @@ class GameService {
           onCatchEvent(payload);
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          onConnectionError?.(new Error('Connection to match server lost. Attempting to reconnect...'));
+        }
+      });
 
     this.channel = channel;
 
@@ -69,6 +74,49 @@ class GameService {
         this.channel = null;
       }
     };
+  }
+
+  /**
+   * Authoritatively activates a tactical ability via Supabase RPC.
+   * Validates role eligibility, cooldown, and duration server-side.
+   */
+  async activateAbility(
+    gameId: string,
+    playerId: string,
+    ability: AbilityType
+  ): Promise<ActiveEffect> {
+    const { data, error } = await supabase.rpc('activate_ability', {
+      p_game_id: gameId,
+      p_player_id: playerId,
+      p_ability: ability,
+    });
+
+    if (error) {
+      if (error.code === 'PGRST202') {
+        throw new Error(
+          `Server function 'activate_ability' not found on backend. Please apply the latest Supabase migration.`
+        );
+      }
+      throw new Error(error.message || 'Server rejected ability activation.');
+    }
+
+    if (!data?.success) {
+      throw new Error(data?.message || 'Ability activation failed on server.');
+    }
+
+    const effect: ActiveEffect = {
+      id: data.effect_id,
+      ability: data.ability,
+      actorPlayerId: playerId,
+      startedAt: Number(data.started_at),
+      expiresAt: Number(data.expires_at),
+      cooldownUntil: Number(data.cooldown_until),
+    };
+
+    // Broadcast server-validated effect to all match participants
+    await this.broadcastAbility(effect);
+
+    return effect;
   }
 
   /**
@@ -151,3 +199,4 @@ class GameService {
 }
 
 export const gameService = new GameService();
+

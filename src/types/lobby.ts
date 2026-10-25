@@ -29,6 +29,8 @@ export interface LobbyPlayer {
   lastSeenAt: number;
 }
 
+export type ZoneShrinkMode = 'NONE' | 'CONCENTRIC' | 'BATTLE_ROYALE';
+
 export interface MatchSettings {
   durationMinutes: number;
   headStartSeconds: number;
@@ -36,12 +38,14 @@ export interface MatchSettings {
   maxPlayers: number;
   runnerHearts: number;
   catchRadiusMeters: number;
+  zoneShrinkMode?: ZoneShrinkMode;
 }
 
 export interface PlayZoneSettings {
   type: 'circle';
   radiusMeters: number;
   center?: [number, number]; // [lng, lat]
+  shrinkMode?: ZoneShrinkMode;
 }
 
 export interface MatchSession {

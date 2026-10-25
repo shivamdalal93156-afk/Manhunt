@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,12 +9,33 @@ import {
 } from 'react-native';
 import { Badge, Button, Card } from '@/components/ui';
 import { useLocation } from '@/hooks/useLocation';
+import { guestAuth } from '@/services/auth/guestAuth';
 import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
 
 export default function SettingsScreen() {
   const { permissionStatus, currentLocation, refreshLocation } = useLocation();
-  const [displayName, setDisplayName] = useState('Ghost-94');
+  const [displayName, setDisplayName] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    guestAuth.getGuestProfile().then((p) => {
+      setDisplayName(p.displayName);
+    });
+  }, []);
+
+  const handleSaveProfile = async () => {
+    if (!displayName.trim()) return;
+    setSavingProfile(true);
+    try {
+      await guestAuth.updateDisplayName(displayName.trim());
+      Alert.alert('SUCCESS', 'Profile codename updated.');
+    } catch {
+      Alert.alert('ERROR', 'Failed to update codename.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   const handleRefreshGPS = async () => {
     setRefreshing(true);
@@ -36,6 +58,14 @@ export default function SettingsScreen() {
           onChangeText={setDisplayName}
           placeholderTextColor={colors.text.muted}
           maxLength={20}
+        />
+        <Button
+          title="UPDATE CODENAME"
+          variant="secondary"
+          size="sm"
+          onPress={handleSaveProfile}
+          loading={savingProfile}
+          style={styles.saveProfileBtn}
         />
         <View style={styles.metaRow}>
           <Text style={styles.metaLabel}>IDENTITY TYPE</Text>
@@ -147,6 +177,9 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.base,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  saveProfileBtn: {
     marginBottom: spacing.sm,
   },
   metaRow: {

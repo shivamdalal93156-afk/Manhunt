@@ -6,6 +6,7 @@ module.exports = {
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
+      isolatedModules: true,
       tsconfig: {
         jsx: 'react-jsx',
       },
@@ -13,4 +14,5 @@ module.exports = {
   },
   testMatch: ['**/__tests__/**/*.test.ts', '**/*.test.ts'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
+  maxWorkers: 2,
 };

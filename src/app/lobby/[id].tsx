@@ -98,8 +98,11 @@ export default function LobbyScreen() {
   const handleStartGame = async () => {
     try {
       await startMatch();
-    } catch {
-      // Error handled in store
+    } catch (err: unknown) {
+      Alert.alert(
+        'CANNOT START MATCH',
+        err instanceof Error ? err.message : 'Failed to start match on server'
+      );
     }
   };
 
@@ -134,35 +137,47 @@ export default function LobbyScreen() {
           </View>
         </View>
 
-        {/* Host role switch controls */}
+        {/* Host role swap authority controls */}
         {isHost ? (
-          <View style={styles.hostRoleButtons}>
+          <View style={styles.hostRoleControls}>
             <TouchableOpacity
               style={[
-                styles.miniRoleBtn,
-                player.role === 'HUNTER' && styles.miniRoleBtnHunterActive,
+                styles.roleSwapPill,
+                player.role === 'HUNTER'
+                  ? styles.roleSwapPillHunterActive
+                  : styles.roleSwapPillInactive,
               ]}
               onPress={() => updateRole(player.id, 'HUNTER')}
+              activeOpacity={0.7}
             >
-              <Text style={styles.miniRoleText}>H</Text>
+              <Text
+                style={[
+                  styles.roleSwapText,
+                  player.role === 'HUNTER' && styles.roleSwapTextHunterActive,
+                ]}
+              >
+                ⚡ CHASER
+              </Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={[
-                styles.miniRoleBtn,
-                player.role === 'RUNNER' && styles.miniRoleBtnRunnerActive,
+                styles.roleSwapPill,
+                player.role === 'RUNNER'
+                  ? styles.roleSwapPillRunnerActive
+                  : styles.roleSwapPillInactive,
               ]}
               onPress={() => updateRole(player.id, 'RUNNER')}
+              activeOpacity={0.7}
             >
-              <Text style={styles.miniRoleText}>R</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.miniRoleBtn,
-                player.role === 'REFEREE' && styles.miniRoleBtnRefereeActive,
-              ]}
-              onPress={() => updateRole(player.id, 'REFEREE')}
-            >
-              <Text style={styles.miniRoleText}>S</Text>
+              <Text
+                style={[
+                  styles.roleSwapText,
+                  player.role === 'RUNNER' && styles.roleSwapTextRunnerActive,
+                ]}
+              >
+                🏃 RUNNER
+              </Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -188,7 +203,7 @@ export default function LobbyScreen() {
         )}
 
         {/* Join Code Header Banner */}
-        <Card variant="elevated" style={styles.codeCard}>
+        <Card variant="glass" style={styles.codeCard}>
           <Text style={styles.codeEyebrow}>INVITATION JOIN CODE</Text>
           <View style={styles.codeRow}>
             <Text style={styles.codeText}>{lobbyState.joinCode}</Text>
@@ -203,7 +218,7 @@ export default function LobbyScreen() {
             </TouchableOpacity>
           </View>
           <Text style={styles.codeHint}>
-            Share this 6-character code with nearby players to enter this lobby.
+            Share this 6-character code with players to enter this match.
           </Text>
         </Card>
 
@@ -212,35 +227,55 @@ export default function LobbyScreen() {
           <View style={styles.telemetryBox}>
             <Text style={styles.telemetryLabel}>DURATION</Text>
             <Text style={styles.telemetryVal}>
-              {lobbyState.settings.durationMinutes}m
+              {lobbyState.settings.durationMinutes >= 60
+                ? `${(lobbyState.settings.durationMinutes / 60).toFixed(lobbyState.settings.durationMinutes % 60 ? 1 : 0)}h`
+                : `${lobbyState.settings.durationMinutes}m`}
             </Text>
           </View>
           <View style={styles.telemetryBox}>
-            <Text style={styles.telemetryLabel}>RADAR PING</Text>
+            <Text style={styles.telemetryLabel}>GPS REVEAL</Text>
             <Text style={styles.telemetryVal}>
-              {lobbyState.settings.locationPingIntervalSeconds}s
+              {lobbyState.settings.locationPingIntervalSeconds >= 3600
+                ? `${(lobbyState.settings.locationPingIntervalSeconds / 3600).toFixed(1).replace(/\.0$/, '')}h`
+                : lobbyState.settings.locationPingIntervalSeconds >= 60
+                ? `${Math.floor(lobbyState.settings.locationPingIntervalSeconds / 60)}m`
+                : `${lobbyState.settings.locationPingIntervalSeconds}s`}
             </Text>
           </View>
           <View style={styles.telemetryBox}>
             <Text style={styles.telemetryLabel}>PLAY ZONE</Text>
             <Text style={styles.telemetryVal}>
-              {lobbyState.playZone.radiusMeters}m
+              {lobbyState.playZone.radiusMeters >= 1000
+                ? `${(lobbyState.playZone.radiusMeters / 1000).toFixed(lobbyState.playZone.radiusMeters % 1000 ? 1 : 0)}km`
+                : `${lobbyState.playZone.radiusMeters}m`}
             </Text>
           </View>
           <View style={styles.telemetryBox}>
-            <Text style={styles.telemetryLabel}>CAPACITY</Text>
+            <Text style={styles.telemetryLabel}>PLAYERS</Text>
             <Text style={styles.telemetryVal}>
               {lobbyState.players.length}/{lobbyState.settings.maxPlayers}
             </Text>
           </View>
         </View>
 
+        {/* Game Mode Banner */}
+        <View style={styles.modeRuleBanner}>
+          <Text style={styles.modeRuleIcon}>
+            {lobbyState.settings.runnerHearts === 1 ? '⚡' : '❤️'}
+          </Text>
+          <Text style={styles.modeRuleText}>
+            {lobbyState.settings.runnerHearts === 1
+              ? 'SUDDEN DEATH: 1 Catch = Immediate Elimination'
+              : `SURVIVAL MODE: Runners have ${lobbyState.settings.runnerHearts} Lives / Hearts`}
+          </Text>
+        </View>
+
         {/* Hunters Squadron */}
         <View style={styles.squadHeader}>
           <Text style={styles.squadTitleHunter}>
-            HUNTERS ({hunters.length})
+            CHASERS ({hunters.length})
           </Text>
-          <Badge label="CHASERS" variant="hunter" />
+          <Badge label="HUNTER" variant="hunter" />
         </View>
         <Card variant="hunter" style={styles.squadCard}>
           {hunters.length > 0 ? (
@@ -255,9 +290,9 @@ export default function LobbyScreen() {
         {/* Runners Squadron */}
         <View style={styles.squadHeader}>
           <Text style={styles.squadTitleRunner}>
-            RUNNERS ({runners.length})
+            EVADERS ({runners.length})
           </Text>
-          <Badge label="EVADERS" variant="runner" />
+          <Badge label="RUNNER" variant="runner" />
         </View>
         <Card variant="runner" style={styles.squadCard}>
           {runners.length > 0 ? (
@@ -295,7 +330,7 @@ export default function LobbyScreen() {
               )}
               <Button
                 title={isLoading ? 'STARTING...' : 'LAUNCH MATCH'}
-                variant="hunter"
+                variant="gradient"
                 size="lg"
                 fullWidth
                 disabled={!canStartMatch || isLoading}
@@ -306,7 +341,7 @@ export default function LobbyScreen() {
           ) : (
             <Button
               title={myPlayer?.isReady ? 'MARK NOT READY' : 'I AM READY'}
-              variant={myPlayer?.isReady ? 'secondary' : 'runner'}
+              variant={myPlayer?.isReady ? 'secondary' : 'gradient'}
               size="lg"
               fullWidth
               onPress={toggleReady}
@@ -322,6 +357,7 @@ export default function LobbyScreen() {
             onPress={handleLeave}
           />
         </View>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -339,12 +375,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: spacing.lg,
     marginBottom: spacing.md,
+    borderColor: 'rgba(232, 93, 59, 0.4)',
+    borderWidth: 1.5,
   },
   codeEyebrow: {
     color: colors.hunter.primary,
     fontSize: typography.fontSize.xs,
     letterSpacing: typography.letterSpacing.wide,
-    fontWeight: '700',
+    fontWeight: '800',
     marginBottom: spacing.xs,
   },
   codeRow: {
@@ -354,22 +392,23 @@ const styles = StyleSheet.create({
   },
   codeText: {
     color: colors.text.primary,
-    fontSize: 32,
+    fontSize: 34,
     fontWeight: '900',
-    letterSpacing: 6,
+    letterSpacing: 8,
+    fontFamily: typography.fontFamily.mono,
   },
   copyBtn: {
-    backgroundColor: colors.background.elevated,
+    backgroundColor: 'rgba(232, 93, 59, 0.15)',
     borderColor: colors.hunter.primary,
     borderWidth: 1,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: borderRadius.sm,
+    paddingVertical: spacing.xs + 3,
+    borderRadius: borderRadius.full,
   },
   copyText: {
     color: colors.hunter.primary,
     fontSize: typography.fontSize.xs,
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: 1,
   },
   codeHint: {
@@ -381,28 +420,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: spacing.md,
+    gap: spacing.xs,
   },
   telemetryBox: {
     flex: 1,
-    backgroundColor: colors.background.surface,
-    borderColor: colors.border.subtle,
+    backgroundColor: colors.background.surfaceCard,
+    borderColor: colors.border.glass,
     borderWidth: 1,
-    borderRadius: borderRadius.sm,
+    borderRadius: borderRadius.md,
     padding: spacing.sm,
-    marginHorizontal: 2,
     alignItems: 'center',
   },
   telemetryLabel: {
     color: colors.text.muted,
     fontSize: 9,
     letterSpacing: 1,
+    fontWeight: '700',
   },
   telemetryVal: {
     color: colors.text.primary,
     fontSize: typography.fontSize.sm,
-    fontWeight: '700',
+    fontWeight: '800',
     marginTop: 2,
   },
+
   squadHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -495,36 +536,42 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 2,
   },
-  hostRoleButtons: {
+  hostRoleControls: {
     flexDirection: 'row',
     gap: 4,
+    alignItems: 'center',
   },
-  miniRoleBtn: {
-    width: 26,
-    height: 26,
+  roleSwapPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     borderRadius: borderRadius.sm,
-    backgroundColor: colors.background.elevated,
     borderWidth: 1,
-    borderColor: colors.border.subtle,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  miniRoleBtnHunterActive: {
+  roleSwapPillInactive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  roleSwapPillHunterActive: {
     borderColor: colors.hunter.primary,
-    backgroundColor: 'rgba(0, 240, 255, 0.25)',
+    backgroundColor: 'rgba(232, 93, 59, 0.25)',
   },
-  miniRoleBtnRunnerActive: {
+  roleSwapPillRunnerActive: {
     borderColor: colors.runner.primary,
-    backgroundColor: 'rgba(255, 158, 0, 0.25)',
+    backgroundColor: 'rgba(0, 229, 255, 0.2)',
   },
-  miniRoleBtnRefereeActive: {
-    borderColor: colors.referee.primary,
-    backgroundColor: 'rgba(168, 85, 247, 0.25)',
-  },
-  miniRoleText: {
-    color: colors.text.primary,
-    fontSize: 11,
+  roleSwapText: {
+    color: colors.text.muted,
+    fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  roleSwapTextHunterActive: {
+    color: colors.brand.gradientEnd,
+  },
+  roleSwapTextRunnerActive: {
+    color: colors.runner.primary,
   },
   actionSection: {
     marginTop: spacing.lg,
@@ -538,5 +585,26 @@ const styles = StyleSheet.create({
   },
   mainActionBtn: {
     marginBottom: spacing.sm,
+  },
+  modeRuleBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderWidth: 1,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: spacing.xs,
+  },
+  modeRuleIcon: {
+    fontSize: 14,
+  },
+  modeRuleText: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.xs,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
 });

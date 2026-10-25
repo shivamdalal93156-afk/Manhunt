@@ -19,42 +19,90 @@ function generateSimpleUUID(): string {
 
 class GuestAuthService {
   private cachedProfile: PlayerProfile | null = null;
+  private authInitPromise: Promise<string | null> | null = null;
+
+  /**
+   * Ensures the user has an active authenticated session via Supabase Anonymous Auth.
+   * Derives a cryptographic JWT and session user ID (auth.uid()).
+   */
+  async ensureAuthenticatedSession(): Promise<string | null> {
+    if (this.authInitPromise) {
+      return this.authInitPromise;
+    }
+
+    this.authInitPromise = (async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session?.user?.id) {
+          return sessionData.session.user.id;
+        }
+
+        const { data: authData, error } = await supabase.auth.signInAnonymously();
+        if (error) {
+          // If anonymous sign in is disabled or network fails, log and return null for offline fallback
+          console.warn('[Auth] Anonymous sign-in attempt warning:', error.message);
+          return null;
+        }
+
+        return authData?.user?.id ?? null;
+      } catch (err) {
+        console.warn('[Auth] Session initialization failed, proceeding with offline profile:', err);
+        return null;
+      } finally {
+        this.authInitPromise = null;
+      }
+    })();
+
+    return this.authInitPromise;
+  }
 
   async getGuestProfile(): Promise<PlayerProfile> {
     if (this.cachedProfile) {
       return this.cachedProfile;
     }
 
+    let storedDisplayName: string | null = null;
+    let fallbackId: string | null = null;
+
     try {
       const stored = await AsyncStorage.getItem(GUEST_STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored) as PlayerProfile;
-        if (parsed.id && parsed.displayName) {
-          this.cachedProfile = parsed;
-          this.syncRemoteProfile(parsed);
-          return parsed;
+        if (parsed.displayName) {
+          storedDisplayName = parsed.displayName;
+        }
+        if (parsed.id) {
+          fallbackId = parsed.id;
         }
       }
     } catch {
-      // Fallback if storage fails
+      // Storage read non-fatal
     }
 
-    // Generate new guest profile
-    const newProfile: PlayerProfile = {
-      id: generateSimpleUUID(),
-      displayName: generateRandomGhostName(),
+    // Authenticate with Supabase to get authoritative JWT user ID
+    const authUserId = await this.ensureAuthenticatedSession();
+    const effectiveId = authUserId || fallbackId || generateSimpleUUID();
+    const effectiveName = storedDisplayName || generateRandomGhostName();
+
+    const profile: PlayerProfile = {
+      id: effectiveId,
+      displayName: effectiveName,
       isGuest: true,
     };
 
+    this.cachedProfile = profile;
+
+    // Persist updated profile mapping
     try {
-      await AsyncStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(newProfile));
+      await AsyncStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(profile));
     } catch {
       // Storage error non-fatal
     }
 
-    this.cachedProfile = newProfile;
-    this.syncRemoteProfile(newProfile);
-    return newProfile;
+    // Synchronize remote profile
+    await this.syncRemoteProfile(profile);
+
+    return profile;
   }
 
   async updateDisplayName(newName: string): Promise<PlayerProfile> {
@@ -72,11 +120,11 @@ class GuestAuthService {
       // Storage error non-fatal
     }
 
-    this.syncRemoteProfile(updated);
+    await this.syncRemoteProfile(updated);
     return updated;
   }
 
-  private async syncRemoteProfile(profile: PlayerProfile): Promise<void> {
+  async syncRemoteProfile(profile: PlayerProfile): Promise<void> {
     try {
       await supabase.from('profiles').upsert({
         id: profile.id,

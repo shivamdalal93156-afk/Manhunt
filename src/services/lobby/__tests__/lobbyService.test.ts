@@ -7,6 +7,13 @@ jest.mock('@/services/supabase', () => {
     supabase: {
       rpc: jest.fn(),
       from: jest.fn(),
+      auth: {
+        getSession: jest.fn().mockResolvedValue({ data: { session: null }, error: null }),
+        signInAnonymously: jest.fn().mockResolvedValue({
+          data: { user: { id: 'test-auth-user-id' } },
+          error: null,
+        }),
+      },
       channel: jest.fn(() => ({
         on: jest.fn().mockReturnThis(),
         subscribe: jest.fn((cb) => {
@@ -117,42 +124,50 @@ describe('Server-Authoritative Multiplayer Lobby Service', () => {
     });
   });
 
-  describe('startMatch authoritativeness', () => {
-    it('prevents starting match if there are no runners', async () => {
-      const mockSelect = jest.fn().mockReturnValue({
-        eq: jest.fn().mockResolvedValue({
-          data: [{ role: 'HUNTER' }], // 1 hunter, 0 runners
-          error: null,
-        }),
+  describe('startMatch authoritativeness & security', () => {
+    it('authoritatively starts match via start_match_authoritative RPC', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValueOnce({
+        data: { success: true, game_id: 'test-game-uuid-1', status: 'COUNTDOWN' },
+        error: null,
       });
 
-      (supabase.from as jest.Mock).mockReturnValue({
-        select: mockSelect,
+      await lobbyService.startMatch('test-game-uuid-1');
+
+      expect(supabase.rpc).toHaveBeenCalledWith('start_match_authoritative', {
+        p_game_id: 'test-game-uuid-1',
+        p_host_profile_id: expect.any(String),
+      });
+    });
+
+    it('rejects match start if unauthorized non-host attempts to start match', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValueOnce({
+        data: null,
+        error: { message: 'Only the match host can start the game' },
       });
 
       await expect(lobbyService.startMatch('test-game-uuid-1')).rejects.toThrow(
-        'A match requires at least one Runner before starting.'
+        'Only the match host can start the game'
       );
     });
 
-    it('prevents starting match if there are no hunters', async () => {
-      const mockSelect = jest.fn().mockReturnValue({
-        eq: jest.fn().mockResolvedValue({
-          data: [{ role: 'RUNNER' }], // 0 hunters, 1 runner
-          error: null,
-        }),
-      });
-
-      (supabase.from as jest.Mock).mockReturnValue({
-        select: mockSelect,
+    it('rejects match start if server reports missing runners', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValueOnce({
+        data: null,
+        error: { message: 'Match requires at least one Runner before starting' },
       });
 
       await expect(lobbyService.startMatch('test-game-uuid-1')).rejects.toThrow(
-        'A match requires at least one Hunter before starting.'
+        'Match requires at least one Runner before starting'
       );
     });
 
-    it('starts match when both roles are present', async () => {
+    it('falls back to client validation when RPC is not present (PGRST202)', async () => {
+      // 1. RPC returns PGRST202 (not found on legacy schema)
+      (supabase.rpc as jest.Mock).mockResolvedValueOnce({
+        data: null,
+        error: { code: 'PGRST202', message: 'Function not found' },
+      });
+
       const mockUpdate = jest.fn().mockReturnValue({
         eq: jest.fn().mockResolvedValue({ error: null }),
       });
@@ -179,7 +194,7 @@ describe('Server-Authoritative Multiplayer Lobby Service', () => {
       await lobbyService.startMatch('test-game-uuid-1');
 
       expect(mockUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'COUNTDOWN' })
+        expect.objectContaining({ status: 'ACTIVE' })
       );
     });
   });

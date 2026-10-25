@@ -26,17 +26,21 @@ export const TacticalRadarMap: React.FC<TacticalRadarMapProps> = ({
   selectedRunnerId,
   onSelectRunner,
 }) => {
-  const centerCoord = hunterLocation || { latitude: 37.7749, longitude: -122.4194 };
   const maxRangeMeters = Math.max(zoneRadiusMeters, 200);
+  const now = Date.now();
 
   // Convert distance and bearing from center to local X,Y on radar canvas
   const getCanvasCoordinates = (targetLat: number, targetLng: number) => {
-    const distMeters = haversineDistance(centerCoord, {
+    if (!hunterLocation) {
+      return { x: MAP_SIZE / 2, y: MAP_SIZE / 2, distMeters: 0 };
+    }
+
+    const distMeters = haversineDistance(hunterLocation, {
       latitude: targetLat,
       longitude: targetLng,
     });
 
-    const bearing = initialBearing(centerCoord, {
+    const bearing = initialBearing(hunterLocation, {
       latitude: targetLat,
       longitude: targetLng,
     });
@@ -60,68 +64,85 @@ export const TacticalRadarMap: React.FC<TacticalRadarMapProps> = ({
   return (
     <View style={styles.container}>
       <View style={[styles.radarSurface, { width: MAP_SIZE, height: MAP_SIZE }]}>
-        {/* Distance Range Concentric Rings */}
-        <View style={[styles.ring, { width: MAP_SIZE * 0.3, height: MAP_SIZE * 0.3 }]} />
-        <View style={[styles.ring, { width: MAP_SIZE * 0.6, height: MAP_SIZE * 0.6 }]} />
-        <View style={[styles.ring, { width: MAP_SIZE * 0.9, height: MAP_SIZE * 0.9 }]} />
+        {/* Distance Range Concentric Rings with Range Labels */}
+        <View style={[styles.ring, { width: MAP_SIZE * 0.35, height: MAP_SIZE * 0.35 }]} />
+        <View style={[styles.ring, { width: MAP_SIZE * 0.65, height: MAP_SIZE * 0.65 }]} />
+        <View style={[styles.ring, { width: MAP_SIZE * 0.92, height: MAP_SIZE * 0.92 }]} />
+
+        {/* Range Ring Labels */}
+        <Text style={[styles.rangeLabel, { top: MAP_SIZE * 0.04 }]}>{maxRangeMeters}m</Text>
+        <Text style={[styles.rangeLabel, { top: MAP_SIZE * 0.17 }]}>{Math.round(maxRangeMeters * 0.65)}m</Text>
+        <Text style={[styles.rangeLabel, { top: MAP_SIZE * 0.32 }]}>{Math.round(maxRangeMeters * 0.35)}m</Text>
 
         {/* Crosshair Lines */}
         <View style={styles.crosshairVertical} />
         <View style={styles.crosshairHorizontal} />
 
         {/* Hunter Center Marker & 15m Proximity Catch Halo */}
-        <View style={[styles.hunterCatchHalo, { width: catchRadiusPixels * 2, height: catchRadiusPixels * 2 }]} />
-        <View style={styles.hunterCenterMarker}>
-          <View style={styles.hunterDiamond} />
-        </View>
+        {hunterLocation ? (
+          <>
+            <View style={[styles.hunterCatchHalo, { width: catchRadiusPixels * 2, height: catchRadiusPixels * 2 }]} />
+            <View style={styles.hunterCenterMarker}>
+              <View style={styles.hunterDiamond} />
+            </View>
 
-        {/* Runner Markers */}
-        {runners.map((runner) => {
-          const { x, y, distMeters } = getCanvasCoordinates(
-            runner.latitude,
-            runner.longitude
-          );
-          const isSelected = runner.playerId === selectedRunnerId;
-          const isWithinCatch = distMeters <= catchRadiusMeters;
+            {/* Runner Markers */}
+            {runners.map((runner) => {
+              const { x, y, distMeters } = getCanvasCoordinates(
+                runner.latitude,
+                runner.longitude
+              );
+              const isSelected = runner.playerId === selectedRunnerId;
+              const isWithinCatch = distMeters <= catchRadiusMeters;
+              const isStale = runner.measuredAt ? now - runner.measuredAt > 60000 : false;
 
-          return (
-            <TouchableOpacity
-              key={runner.playerId}
-              activeOpacity={0.8}
-              style={[
-                styles.runnerMarker,
-                { left: x - 12, top: y - 12 },
-                isSelected && styles.runnerMarkerSelected,
-                isWithinCatch && styles.runnerMarkerInCatch,
-              ]}
-              onPress={() => onSelectRunner?.(runner)}
-            >
-              <View
-                style={[
-                  styles.runnerDot,
-                  isWithinCatch && styles.runnerDotCatchReady,
-                ]}
-              />
-              <Text style={styles.runnerLabel}>
-                {runner.displayName.slice(0, 6)} ({Math.round(distMeters)}m)
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+              return (
+                <TouchableOpacity
+                  key={runner.playerId}
+                  activeOpacity={0.8}
+                  style={[
+                    styles.runnerMarker,
+                    { left: x - 12, top: y - 12 },
+                    isSelected && styles.runnerMarkerSelected,
+                    isWithinCatch && styles.runnerMarkerInCatch,
+                    isStale && { opacity: 0.45 },
+                  ]}
+                  onPress={() => onSelectRunner?.(runner)}
+                >
+                  <View
+                    style={[
+                      styles.runnerDot,
+                      isWithinCatch && styles.runnerDotCatchReady,
+                      isStale && { backgroundColor: colors.text.muted },
+                    ]}
+                  />
+                  <Text style={[styles.runnerLabel, isWithinCatch && styles.runnerLabelCatch]}>
+                    {runner.displayName.slice(0, 6)} ({Math.round(distMeters)}m{isStale ? ' • STALE' : ''})
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </>
+        ) : (
+          <View style={styles.gpsAcquiringOverlay}>
+            <Text style={styles.gpsAcquiringText}>🛰️ ACQUIRING GPS LOCK...</Text>
+            <Text style={styles.gpsAcquiringSub}>Waiting for live device coordinates</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.legendRow}>
         <View style={styles.legendItem}>
           <View style={[styles.legendBox, { backgroundColor: colors.hunter.primary }]} />
-          <Text style={styles.legendText}>YOUR POSITION</Text>
+          <Text style={styles.legendText}>YOU (CHASER)</Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendBox, { backgroundColor: colors.runner.primary }]} />
-          <Text style={styles.legendText}>RUNNER RADAR PING</Text>
+          <Text style={styles.legendText}>RUNNER</Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendBox, { borderColor: colors.status.safe, borderWidth: 1 }]} />
-          <Text style={styles.legendText}>15m CATCH ZONE</Text>
+          <Text style={styles.legendText}>15m CATCH</Text>
         </View>
       </View>
     </View>
@@ -134,54 +155,71 @@ const styles = StyleSheet.create({
     marginVertical: spacing.sm,
   },
   radarSurface: {
-    backgroundColor: '#07090D',
-    borderRadius: borderRadius.md,
-    borderColor: colors.border.active,
+    backgroundColor: '#0D0E12',
+    borderRadius: borderRadius.lg,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     borderWidth: 1.5,
     overflow: 'hidden',
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 8,
   },
   ring: {
     position: 'absolute',
     borderRadius: 9999,
     borderWidth: 1,
-    borderColor: 'rgba(0, 240, 255, 0.12)',
+    borderColor: 'rgba(255, 255, 255, 0.10)',
     borderStyle: 'dashed',
+  },
+  rangeLabel: {
+    position: 'absolute',
+    color: colors.text.muted,
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   crosshairVertical: {
     position: 'absolute',
     width: 1,
     height: '100%',
-    backgroundColor: 'rgba(0, 240, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
   },
   crosshairHorizontal: {
     position: 'absolute',
     height: 1,
     width: '100%',
-    backgroundColor: 'rgba(0, 240, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
   },
   hunterCenterMarker: {
     position: 'absolute',
-    width: 20,
-    height: 20,
+    width: 24,
+    height: 24,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 10,
   },
   hunterDiamond: {
-    width: 10,
-    height: 10,
+    width: 12,
+    height: 12,
     backgroundColor: colors.hunter.primary,
+    borderRadius: 2,
     transform: [{ rotate: '45deg' }],
+    shadowColor: colors.hunter.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 6,
   },
   hunterCatchHalo: {
     position: 'absolute',
     borderRadius: 9999,
-    borderColor: colors.status.safe,
-    borderWidth: 1,
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderColor: 'rgba(16, 185, 129, 0.6)',
+    borderWidth: 1.5,
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
     zIndex: 5,
   },
   runnerMarker: {
@@ -193,7 +231,7 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   runnerMarkerSelected: {
-    transform: [{ scale: 1.2 }],
+    transform: [{ scale: 1.25 }],
   },
   runnerMarkerInCatch: {
     borderWidth: 2,
@@ -201,37 +239,54 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   runnerDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
     backgroundColor: colors.runner.primary,
+    shadowColor: colors.runner.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
   },
   runnerDotCatchReady: {
     backgroundColor: colors.status.danger,
+    shadowColor: colors.status.danger,
   },
   runnerLabel: {
     position: 'absolute',
     top: 22,
     color: colors.runner.primary,
     fontSize: 9,
-    fontWeight: '700',
-    backgroundColor: 'rgba(11, 14, 20, 0.85)',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 3,
+    fontWeight: '800',
+    backgroundColor: 'rgba(10, 10, 10, 0.92)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
     minWidth: 50,
     textAlign: 'center',
+  },
+  runnerLabelCatch: {
+    color: colors.status.danger,
+    borderColor: colors.status.danger,
   },
   legendRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     width: '90%',
     marginTop: spacing.sm,
+    backgroundColor: colors.background.surfaceCard,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: borderRadius.full,
+    borderColor: colors.border.glass,
+    borderWidth: 1,
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
   },
   legendBox: {
     width: 8,
@@ -242,5 +297,26 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontSize: 9,
     letterSpacing: 0.8,
+    fontWeight: '700',
+  },
+  gpsAcquiringOverlay: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.md,
+    backgroundColor: 'rgba(10, 10, 10, 0.9)',
+    borderRadius: borderRadius.md,
+  },
+  gpsAcquiringText: {
+    color: colors.hunter.primary,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  gpsAcquiringSub: {
+    color: colors.text.muted,
+    fontSize: 10,
   },
 });
+

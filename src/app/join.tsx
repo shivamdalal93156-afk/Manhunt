@@ -54,7 +54,7 @@ export default function JoinMatchScreen() {
         autoCorrect={false}
       />
 
-      <Text style={styles.inputLabel}>SELECT PREFERRED SQUAD</Text>
+      <Text style={styles.inputLabel}>SELECT SQUAD ROLE</Text>
       <View style={styles.roleSelector}>
         <TouchableOpacity
           style={[
@@ -69,7 +69,7 @@ export default function JoinMatchScreen() {
               selectedRole === 'RUNNER' && styles.roleOptionRunnerText,
             ]}
           >
-            RUNNER (EVADER)
+            EVADER (RUNNER)
           </Text>
         </TouchableOpacity>
 
@@ -86,14 +86,14 @@ export default function JoinMatchScreen() {
               selectedRole === 'HUNTER' && styles.roleOptionHunterText,
             ]}
           >
-            HUNTER (CHASER)
+            CHASER (HUNTER)
           </Text>
         </TouchableOpacity>
       </View>
 
       <Button
-        title={isLoading ? 'VERIFYING CODE...' : 'JOIN SQUAD LOBBY'}
-        variant={selectedRole === 'HUNTER' ? 'hunter' : 'runner'}
+        title={isLoading ? 'VERIFYING CODE...' : 'JOIN MATCH'}
+        variant="gradient"
         size="lg"
         fullWidth
         disabled={joinCode.trim().length < 4 || isLoading}
@@ -111,47 +111,27 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background.base,
     padding: spacing.lg,
   },
-  devBanner: {
-    marginBottom: spacing.lg,
-    borderColor: colors.status.warning,
-  },
-  devHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  devTag: {
-    color: colors.status.warning,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '700',
-    letterSpacing: typography.letterSpacing.tactical,
-  },
-  devText: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    lineHeight: 18,
-  },
   inputLabel: {
     color: colors.text.secondary,
     fontSize: typography.fontSize.xs,
     letterSpacing: typography.letterSpacing.wide,
-    fontWeight: '700',
+    fontWeight: '800',
     marginTop: spacing.md,
-    marginBottom: spacing.xs + 2,
+    marginBottom: spacing.sm,
   },
   input: {
-    backgroundColor: colors.background.surface,
-    borderColor: colors.border.active,
+    backgroundColor: colors.background.surfaceCard,
+    borderColor: colors.border.glass,
     borderWidth: 1.5,
     borderRadius: borderRadius.md,
     color: colors.text.primary,
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: '900',
-    letterSpacing: 4,
+    letterSpacing: 6,
+    fontFamily: typography.fontFamily.mono,
     textAlign: 'center',
     paddingVertical: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
   roleSelector: {
     flexDirection: 'row',
@@ -161,24 +141,24 @@ const styles = StyleSheet.create({
   roleOption: {
     flex: 1,
     paddingVertical: spacing.md,
-    backgroundColor: colors.background.surface,
-    borderColor: colors.border.subtle,
+    backgroundColor: colors.background.surfaceCard,
+    borderColor: colors.border.glass,
     borderWidth: 1,
     borderRadius: borderRadius.md,
     alignItems: 'center',
   },
   roleOptionRunnerActive: {
-    backgroundColor: 'rgba(255, 158, 0, 0.15)',
+    backgroundColor: 'rgba(0, 229, 255, 0.12)',
     borderColor: colors.runner.primary,
   },
   roleOptionHunterActive: {
-    backgroundColor: 'rgba(0, 240, 255, 0.15)',
+    backgroundColor: 'rgba(232, 93, 59, 0.12)',
     borderColor: colors.hunter.primary,
   },
   roleOptionText: {
     color: colors.text.secondary,
     fontSize: typography.fontSize.xs,
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: 1,
   },
   roleOptionRunnerText: {
@@ -191,3 +171,4 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
 });
+

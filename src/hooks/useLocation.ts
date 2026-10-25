@@ -14,18 +14,24 @@ export function useLocation() {
   const [isTracking, setIsTracking] = useState(false);
   const [error, setError] = useState<LocationError | null>(null);
 
-  // Check initial permission status on mount
+  // Check initial permission status and auto-acquire location on mount
   useEffect(() => {
     let mounted = true;
-    locationService.getPermissionStatus().then((status) => {
-      if (mounted) {
-        setPermissionStatus(status);
+    locationService.getPermissionStatus().then(async (status) => {
+      if (!mounted) return;
+      setPermissionStatus(status);
+      if (status === 'granted') {
+        const loc = await locationService.getCurrentLocation();
+        if (mounted && loc) {
+          setCurrentLocation(loc);
+        }
       }
     });
     return () => {
       mounted = false;
     };
   }, []);
+
 
   const requestPermission = useCallback(async () => {
     const status = await locationService.requestPermissions();
