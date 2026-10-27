@@ -141,3 +141,70 @@ export function validateAccuracy(
   }
   return accuracyMeters >= 0 && accuracyMeters <= thresholdMeters;
 }
+
+/**
+ * Checks if two line segments (p1-p2 and p3-p4) intersect.
+ */
+function doSegmentsIntersect(
+  p1: LatLng,
+  p2: LatLng,
+  p3: LatLng,
+  p4: LatLng
+): boolean {
+  const ccw = (a: LatLng, b: LatLng, c: LatLng) =>
+    (c.latitude - a.latitude) * (b.longitude - a.longitude) >
+    (b.latitude - a.latitude) * (c.longitude - a.longitude);
+
+  return (
+    ccw(p1, p3, p4) !== ccw(p2, p3, p4) &&
+    ccw(p1, p2, p3) !== ccw(p1, p2, p4)
+  );
+}
+
+/**
+ * Checks if any edge in a polygon intersects with any non-adjacent edge.
+ */
+export function isPolygonSelfIntersecting(coordinates: LatLng[]): boolean {
+  const n = coordinates.length;
+  if (n < 4) return false;
+
+  for (let i = 0; i < n; i++) {
+    const a1 = coordinates[i];
+    const a2 = coordinates[(i + 1) % n];
+
+    for (let j = i + 1; j < n; j++) {
+      // Don't check adjacent edges
+      if (Math.abs(i - j) <= 1 || (i === 0 && j === n - 1)) continue;
+
+      const b1 = coordinates[j];
+      const b2 = coordinates[(j + 1) % n];
+
+      if (doSegmentsIntersect(a1, a2, b1, b2)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Computes approximate area of polygon in square meters.
+ */
+export function calculatePolygonArea(coordinates: LatLng[]): number {
+  if (coordinates.length < 3) return 0;
+  let total = 0;
+  const radius = 6378137; // Earth radius in meters
+
+  for (let i = 0; i < coordinates.length; i++) {
+    const lower = coordinates[i];
+    const upper = coordinates[(i + 1) % coordinates.length];
+    const p1 = (lower.longitude * Math.PI) / 180;
+    const p2 = (upper.longitude * Math.PI) / 180;
+    const q1 = (lower.latitude * Math.PI) / 180;
+    const q2 = (upper.latitude * Math.PI) / 180;
+    total += (p2 - p1) * (2 + Math.sin(q1) + Math.sin(q2));
+  }
+
+  return Math.abs((total * radius * radius) / 2);
+}
+
