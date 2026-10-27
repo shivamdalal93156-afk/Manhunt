@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
@@ -8,1131 +9,1366 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Button, Card, ErrorFallback } from '@/components/ui';
+import { Button, Card, Screen, TopBar } from '@/components/ui';
+import {
+  PlusIcon,
+  MinusIcon,
+  UndoIcon,
+  TrashIcon,
+  TargetIcon,
+  ShapesIcon,
+  PowerIcon,
+  TimerIcon,
+  FlashIcon,
+  CompassIcon,
+  ShieldIcon,
+  RadarIcon,
+  LocateIcon,
+  SettingsIcon,
+} from '@/components/ui/Icons';
+import { LivePlayZoneMap } from '@/components/game/LivePlayZoneMap';
+import { useLocation } from '@/hooks/useLocation';
+import {
+  calculatePolygonArea,
+  isPolygonSelfIntersecting,
+} from '@/lib/geo/geofence';
+import { lobbyService } from '@/services/lobby/lobbyService';
 import { useLobbyStore } from '@/store/lobbyStore';
-import { ZoneShrinkMode } from '@/types/lobby';
-import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
+import { PlayZoneSettings } from '@/types/lobby';
+import { borderRadius, colors, shadows, spacing, typography } from '@/theme/tokens';
+
+const DURATION_PRESETS = [
+  { label: '15 minutes', minutes: 15, subtitle: 'Fast sprint skirmish' },
+  { label: '30 minutes', minutes: 30, subtitle: 'Recommended standard match' },
+  { label: '45 minutes', minutes: 45, subtitle: 'Tactical squad operation' },
+  { label: '1 hour', minutes: 60, subtitle: 'Full endurance pursuit' },
+  { label: '1 hour 30 minutes', minutes: 90, subtitle: 'Extended urban manhunt' },
+  { label: '2 hours', minutes: 120, subtitle: 'Marathon survival challenge' },
+];
+
+const INTERVAL_PRESETS = [
+  { label: '30 seconds', seconds: 30, subtitle: 'High-frequency radar sweeps' },
+  { label: '1 minute', seconds: 60, subtitle: 'Balanced tactical tracking' },
+  { label: '2 minutes', seconds: 120, subtitle: 'Stealth runner advantage' },
+  { label: '3 minutes', seconds: 180, subtitle: 'Long delay predator hunt' },
+  { label: '5 minutes', seconds: 300, subtitle: 'Ghost evasion protocol' },
+];
+
+const renderDurationIcon = (minutes: number, isSelected: boolean) => {
+  const color = isSelected ? colors.brand.accent : colors.text.secondary;
+  switch (minutes) {
+    case 15:
+      return <FlashIcon size={18} color={color} />;
+    case 30:
+    case 45:
+      return <TimerIcon size={18} color={color} />;
+    case 60:
+      return <CompassIcon size={18} color={color} />;
+    case 90:
+      return <ShieldIcon size={18} color={color} />;
+    case 120:
+      return <RadarIcon size={18} color={color} />;
+    default:
+      return <SettingsIcon size={18} color={color} />;
+  }
+};
+
+const renderIntervalIcon = (seconds: number, isSelected: boolean) => {
+  const color = isSelected ? colors.brand.accent : colors.text.secondary;
+  switch (seconds) {
+    case 30:
+      return <RadarIcon size={18} color={color} />;
+    case 60:
+      return <LocateIcon size={18} color={color} />;
+    case 120:
+      return <TargetIcon size={18} color={color} />;
+    case 180:
+      return <CompassIcon size={18} color={color} />;
+    case 300:
+      return <ShieldIcon size={18} color={color} />;
+    default:
+      return <SettingsIcon size={18} color={color} />;
+  }
+};
+
+// Presets (25km removed per user request)
+const RADIUS_PRESETS = [
+  { label: '300m', meters: 300 },
+  { label: '500m', meters: 500 },
+  { label: '1km', meters: 1000 },
+  { label: '2.5km', meters: 2500 },
+  { label: '5km', meters: 5000 },
+];
 
 export default function CreateMatchScreen() {
   const router = useRouter();
-  const { createMatch, isLoading, error, clearError } = useLobbyStore();
+  const params = useLocalSearchParams<{ step?: string; gameId?: string }>();
+  const { currentLocation, refreshLocation } = useLocation();
+  const { createMatch, lobbyState, isLoading } = useLobbyStore();
+
+  const isEditingFromLobby = Boolean(params.gameId);
+  const initialStep = params.step === '3' ? 3 : params.step === '2' ? 2 : 1;
+  const [step, setStep] = useState<1 | 2 | 3>(initialStep);
+
+  // Step 1: Duration
   const [selectedDuration, setSelectedDuration] = useState(30);
   const [isCustomDuration, setIsCustomDuration] = useState(false);
   const [customDurationText, setCustomDurationText] = useState('30');
 
-  // Runner Location Reveal Interval (formerly Radar Ping) - Up to 1 Day (86,400s)
-  const [selectedPing, setSelectedPing] = useState(30);
-  const [isCustomPing, setIsCustomPing] = useState(false);
-  const [customPingText, setCustomPingText] = useState('30');
+  // Step 2: Location Interval
+  const [selectedInterval, setSelectedInterval] = useState(30);
+  const [isCustomInterval, setIsCustomInterval] = useState(false);
+  const [customIntervalText, setCustomIntervalText] = useState('30');
 
-  // Play Zone Area Radius - Up to 400km (400,000 meters)
-  const [selectedRadius, setSelectedRadius] = useState(500);
+  // Step 3: Play Zone (Circle vs Polygon Area vs None)
+  const [zoneMode, setZoneMode] = useState<'CIRCLE' | 'POLYGON' | 'NONE'>('CIRCLE');
+  const [circleRadius, setCircleRadius] = useState(500);
   const [isCustomRadius, setIsCustomRadius] = useState(false);
   const [customRadiusText, setCustomRadiusText] = useState('500');
+  const [customRadiusUnit, setCustomRadiusUnit] = useState<'m' | 'km'>('m');
 
-  // Play Zone Center Origin: Device GPS vs Custom Anchor
-  const [zoneOriginMode, setZoneOriginMode] = useState<'GPS' | 'CUSTOM'>('GPS');
-  const [customCenter, setCustomCenter] = useState<{ lat: number; lng: number } | null>(null);
+  const [circleCenter, setCircleCenter] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [polygonPoints, setPolygonPoints] = useState<{ latitude: number; longitude: number }[]>([]);
 
-  // Game Mode: ONE_CATCH (1 Heart) vs MULTI_HEARTS (Customizable)
-  const [selectedMode, setSelectedMode] = useState<'ONE_CATCH' | 'MULTI_HEARTS'>('MULTI_HEARTS');
-  const [customHearts, setCustomHearts] = useState(3);
-
-  // Zone Shrink Mode: Static vs Concentric vs Battle Royale (PUBG/Free Fire)
-  const [selectedShrinkMode, setSelectedShrinkMode] = useState<ZoneShrinkMode>('NONE');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem('@manhunt/configured_playzone').then((raw) => {
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed.customCenter) {
-            setCustomCenter(parsed.customCenter);
-            if (parsed.mode === 'CUSTOM') {
-              setZoneOriginMode('CUSTOM');
-            }
-          }
-          if (parsed.zoneRadius) {
-            setSelectedRadius(parsed.zoneRadius);
-            setCustomRadiusText(String(parsed.zoneRadius));
-            if (![300, 1000, 5000, 25000, 100000, 400000].includes(parsed.zoneRadius)) {
-              setIsCustomRadius(true);
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-    });
+    refreshLocation();
+    loadDefaultZone();
   }, []);
 
-  const handleSelectPresetDuration = (mins: number) => {
-    setIsCustomDuration(false);
-    setSelectedDuration(mins);
-    setCustomDurationText(String(mins));
-  };
+  const loadDefaultZone = async () => {
+    try {
+      if (lobbyState?.playZone && isEditingFromLobby) {
+        const pz = lobbyState.playZone;
+        if (pz.mode === 'NONE') {
+          setZoneMode('NONE');
+        } else if (pz.type === 'polygon' && pz.coordinates) {
+          setZoneMode('POLYGON');
+          setPolygonPoints(pz.coordinates);
+        } else {
+          setZoneMode('CIRCLE');
+          if (pz.radiusMeters) {
+            setCircleRadius(pz.radiusMeters);
+            if (pz.radiusMeters >= 1000) {
+              setCustomRadiusText((pz.radiusMeters / 1000).toString());
+              setCustomRadiusUnit('km');
+            } else {
+              setCustomRadiusText(pz.radiusMeters.toString());
+              setCustomRadiusUnit('m');
+            }
+          }
+          if (pz.center) {
+            setCircleCenter(
+              Array.isArray(pz.center)
+                ? { latitude: pz.center[1], longitude: pz.center[0] }
+                : pz.center
+            );
+          }
+        }
+        return;
+      }
 
-  const handleCustomDurationChange = (text: string) => {
-    setCustomDurationText(text);
-    const num = parseInt(text.replace(/[^0-9]/g, ''), 10);
-    if (!isNaN(num) && num > 0) {
-      setSelectedDuration(Math.min(1440, Math.max(5, num)));
+      const stored = await AsyncStorage.getItem('@manhunt/configured_playzone');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.mode === 'NONE') {
+          setZoneMode('NONE');
+        } else if (parsed.type === 'polygon' && parsed.coordinates) {
+          setZoneMode('POLYGON');
+          setPolygonPoints(parsed.coordinates);
+        } else if (parsed.radiusMeters || parsed.zoneRadius) {
+          setZoneMode('CIRCLE');
+          const r = parsed.radiusMeters || parsed.zoneRadius;
+          setCircleRadius(r);
+          if (r >= 1000) {
+            setCustomRadiusText((r / 1000).toString());
+            setCustomRadiusUnit('km');
+          } else {
+            setCustomRadiusText(r.toString());
+            setCustomRadiusUnit('m');
+          }
+          if (parsed.customCenter) setCircleCenter(parsed.customCenter);
+        }
+      }
+    } catch {
+      // ignore
     }
   };
 
-  const handleAdjustDuration = (delta: number) => {
-    setIsCustomDuration(true);
-    setSelectedDuration((prev) => {
-      const next = Math.min(1440, Math.max(5, prev + delta));
-      setCustomDurationText(String(next));
-      return next;
-    });
-  };
+  const effectiveCenter =
+    circleCenter || {
+      latitude: currentLocation?.latitude ?? 28.6139,
+      longitude: currentLocation?.longitude ?? 77.2090,
+    };
 
-  const handleSelectPresetPing = (sec: number) => {
-    setIsCustomPing(false);
-    setSelectedPing(sec);
-    setCustomPingText(String(sec));
-  };
+  const isIntersecting =
+    zoneMode === 'POLYGON' && isPolygonSelfIntersecting(polygonPoints);
+  const polygonArea =
+    zoneMode === 'POLYGON' ? calculatePolygonArea(polygonPoints) : 0;
 
-  const handleCustomPingChange = (text: string) => {
-    setCustomPingText(text);
-    const num = parseInt(text.replace(/[^0-9]/g, ''), 10);
-    if (!isNaN(num) && num > 0) {
-      setSelectedPing(Math.min(86400, Math.max(5, num)));
+  const formatArea = (sqMeters: number) => {
+    if (sqMeters >= 1000000) {
+      return `${(sqMeters / 1000000).toFixed(2)} km²`;
     }
+    return `${Math.round(sqMeters)} m²`;
   };
 
-  const handleAdjustPing = (delta: number) => {
-    setIsCustomPing(true);
-    setSelectedPing((prev) => {
-      const next = Math.min(86400, Math.max(5, prev + delta));
-      setCustomPingText(String(next));
-      return next;
-    });
-  };
-
-  const handleSelectPresetRadius = (rad: number) => {
-    setIsCustomRadius(false);
-    setSelectedRadius(rad);
-    setCustomRadiusText(String(rad));
-  };
-
-  const handleCustomRadiusChange = (text: string) => {
+  const handleCustomRadiusChange = (text: string, unit: 'm' | 'km' = customRadiusUnit) => {
     setCustomRadiusText(text);
-    const num = parseInt(text.replace(/[^0-9]/g, ''), 10);
+    const num = parseFloat(text);
     if (!isNaN(num) && num > 0) {
-      setSelectedRadius(Math.min(400000, Math.max(50, num)));
+      const meters = unit === 'km' ? num * 1000 : num;
+      if (meters >= 5 && meters <= 400000) {
+        setCircleRadius(meters);
+        setErrorMessage(null);
+      } else {
+        setErrorMessage('Custom radius must be between 5m and 400km.');
+      }
     }
   };
 
-  const handleAdjustRadius = (delta: number) => {
-    setIsCustomRadius(true);
-    setSelectedRadius((prev) => {
-      const next = Math.min(400000, Math.max(50, prev + delta));
-      setCustomRadiusText(String(next));
-      return next;
-    });
+  const handleToggleUnit = (unit: 'm' | 'km') => {
+    setCustomRadiusUnit(unit);
+    handleCustomRadiusChange(customRadiusText, unit);
   };
 
-  const effectiveHearts = selectedMode === 'ONE_CATCH' ? 1 : customHearts;
+  const handleNextStep1 = () => {
+    setErrorMessage(null);
+    let finalDuration = selectedDuration;
 
-  const handleCreate = async () => {
+    if (isCustomDuration) {
+      const parsed = parseInt(customDurationText, 10);
+      if (isNaN(parsed) || parsed < 5 || parsed > 720) {
+        setErrorMessage('Custom duration must be between 5 and 720 minutes.');
+        return;
+      }
+      finalDuration = parsed;
+      setSelectedDuration(parsed);
+    }
+
+    setStep(2);
+  };
+
+  const handleNextStep2 = () => {
+    setErrorMessage(null);
+    let finalInterval = selectedInterval;
+
+    if (isCustomInterval) {
+      const parsed = parseInt(customIntervalText, 10);
+      if (isNaN(parsed) || parsed < 10 || parsed > 3600) {
+        setErrorMessage('Custom interval must be between 10 and 3600 seconds.');
+        return;
+      }
+      finalInterval = parsed;
+      setSelectedInterval(parsed);
+    }
+
+    setStep(3);
+  };
+
+  // Floating Polygon Helpers
+  const handleAddPolygonPoint = () => {
+    if (polygonPoints.length >= 12) {
+      Alert.alert('Maximum Limit', 'A custom polygon can have up to 12 points.');
+      return;
+    }
+    const base =
+      polygonPoints.length > 0
+        ? polygonPoints[polygonPoints.length - 1]
+        : effectiveCenter;
+    const angle = (polygonPoints.length * 60 * Math.PI) / 180;
+    const offsetLat = Math.sin(angle) * 0.003;
+    const offsetLng = Math.cos(angle) * 0.003;
+
+    setPolygonPoints([
+      ...polygonPoints,
+      { latitude: base.latitude + offsetLat, longitude: base.longitude + offsetLng },
+    ]);
+  };
+
+  const handleUndoPolygonPoint = () => {
+    if (polygonPoints.length > 0) {
+      setPolygonPoints(polygonPoints.slice(0, -1));
+    }
+  };
+
+  const handleClearPolygonPoints = () => {
+    setPolygonPoints([]);
+  };
+
+  const buildPlayZonePayload = (): PlayZoneSettings => {
+    if (zoneMode === 'NONE') {
+      return {
+        type: 'circle',
+        radiusMeters: 9999999,
+        mode: 'NONE',
+      };
+    }
+    if (zoneMode === 'POLYGON') {
+      return {
+        type: 'polygon',
+        coordinates: polygonPoints,
+        mode: 'POLYGON',
+      };
+    }
+    return {
+      type: 'circle',
+      center: effectiveCenter,
+      radiusMeters: circleRadius,
+      mode: 'CIRCLE',
+    };
+  };
+
+  const handleSaveOrLaunchMatch = async () => {
+    setErrorMessage(null);
+
+    // Validate polygon
+    if (zoneMode === 'POLYGON') {
+      if (polygonPoints.length < 3) {
+        setErrorMessage('A custom polygon zone requires at least 3 points on the map.');
+        return;
+      }
+      if (isIntersecting) {
+        setErrorMessage('Polygon boundary edges cannot cross each other.');
+        return;
+      }
+    }
+
+    // Validate circle custom radius
+    if (zoneMode === 'CIRCLE' && isCustomRadius) {
+      const num = parseFloat(customRadiusText);
+      const meters = customRadiusUnit === 'km' ? num * 1000 : num;
+      if (isNaN(num) || meters < 5 || meters > 400000) {
+        setErrorMessage('Custom radius must be between 5m and 400km.');
+        return;
+      }
+    }
+
+    const playZonePayload = buildPlayZonePayload();
+
+    // 1. Save configured playzone locally for future quick matches
+    try {
+      await AsyncStorage.setItem(
+        '@manhunt/configured_playzone',
+        JSON.stringify({
+          ...playZonePayload,
+          zoneRadius: circleRadius,
+          customCenter: effectiveCenter,
+        })
+      );
+    } catch {
+      // non-fatal
+    }
+
+    // 2. If editing existing lobby
+    if (isEditingFromLobby && params.gameId) {
+      setIsSaving(true);
+      try {
+        await lobbyService.updateGameSettings(params.gameId, {}, playZonePayload);
+        router.back();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to update play zone.';
+        setErrorMessage(msg);
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
+    // 3. Creating brand new match
+    setIsSaving(true);
     try {
       const session = await createMatch({
         durationMinutes: selectedDuration,
-        pingIntervalSeconds: selectedPing,
-        zoneRadiusMeters: selectedRadius,
-        runnerHearts: effectiveHearts,
-        gameMode: selectedMode,
-        customZoneCenter: zoneOriginMode === 'CUSTOM' ? customCenter : null,
-        zoneShrinkMode: selectedShrinkMode,
+        pingIntervalSeconds: selectedInterval,
+        zoneRadiusMeters: circleRadius,
+        playZone: playZonePayload,
       });
-      router.push(`/lobby/${session.gameId}`);
+
+      if (session?.gameId) {
+        router.replace(`/lobby/${session.gameId}` as any);
+      }
     } catch (err: unknown) {
-      Alert.alert(
-        'CREATE MATCH FAILED',
-        err instanceof Error ? err.message : 'Unable to initialize match room'
-      );
+      const msg = err instanceof Error ? err.message : 'Failed to create match.';
+      setErrorMessage(msg);
+    } finally {
+      setIsSaving(false);
     }
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {error && (
-        <ErrorFallback
-          error={error}
-          onRetry={clearError}
-          title="INITIALIZATION FAILED"
-        />
-      )}
+    <Screen scroll={step !== 3}>
+      <TopBar
+        title={
+          isEditingFromLobby
+            ? 'PLAY ZONE & AREA'
+            : step === 1
+            ? 'GAME DURATION'
+            : step === 2
+            ? 'UPDATE INTERVAL'
+            : 'PLAY ZONE & AREA'
+        }
+        subtitle={
+          isEditingFromLobby
+            ? 'MATCH SETTINGS'
+            : `STEP ${step} OF 3`
+        }
+        onBack={() => {
+          if (isEditingFromLobby) {
+            router.back();
+          } else if (step === 3) {
+            setStep(2);
+          } else if (step === 2) {
+            setStep(1);
+          } else {
+            router.back();
+          }
+        }}
+      />
 
-      {/* Game Mode Selection */}
-      <Text style={styles.sectionTitle}>GAME MODE & RUNNER LIVES</Text>
-      <View style={styles.modeRow}>
-        <TouchableOpacity
-          style={[
-            styles.modeCard,
-            selectedMode === 'ONE_CATCH' && styles.modeCardActive,
-          ]}
-          onPress={() => setSelectedMode('ONE_CATCH')}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.modeIcon}>⚡</Text>
-          <Text
-            style={[
-              styles.modeTitle,
-              selectedMode === 'ONE_CATCH' && styles.modeTitleActive,
-            ]}
-          >
-            SUDDEN DEATH
-          </Text>
-          <Text style={styles.modeDesc}>1 Catch = Immediate Elimination</Text>
-          <View style={styles.modePillBadge}>
-            <Text style={styles.modePillText}>1 LIFE</Text>
-          </View>
-        </TouchableOpacity>
+      <View style={step === 3 ? styles.containerStep3 : styles.container}>
+        {/* ================= STEP 1: DURATION ================= */}
+        {step === 1 && (
+          <>
+            <Text style={styles.sectionHeader}>HOW LONG SHOULD THE MATCH LAST?</Text>
+            <Text style={styles.sectionSubtitle}>
+              Runners must survive until this timer reaches zero.
+            </Text>
 
-        <TouchableOpacity
-          style={[
-            styles.modeCard,
-            selectedMode === 'MULTI_HEARTS' && styles.modeCardActive,
-          ]}
-          onPress={() => setSelectedMode('MULTI_HEARTS')}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.modeIcon}>❤️</Text>
-          <Text
-            style={[
-              styles.modeTitle,
-              selectedMode === 'MULTI_HEARTS' && styles.modeTitleActive,
-            ]}
-          >
-            SURVIVAL LIVES
-          </Text>
-          <Text style={styles.modeDesc}>Multiple Hearts / Tag Escapes</Text>
-          <View style={styles.modePillBadge}>
-            <Text style={styles.modePillText}>{customHearts} HEARTS</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
+            <View style={styles.optionsList}>
+              {DURATION_PRESETS.map((preset) => {
+                const isSelected = !isCustomDuration && selectedDuration === preset.minutes;
+                return (
+                  <TouchableOpacity
+                    key={preset.minutes}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setSelectedDuration(preset.minutes);
+                      setIsCustomDuration(false);
+                      setErrorMessage(null);
+                    }}
+                    style={[
+                      styles.optionCard,
+                      isSelected && styles.optionCardSelected,
+                    ]}
+                  >
+                    <View style={styles.optionLeft}>
+                      <View style={[styles.iconCircle, isSelected && styles.iconCircleSelected]}>
+                        {renderDurationIcon(preset.minutes, isSelected)}
+                      </View>
+                      <View style={styles.optionTextColumn}>
+                        <Text
+                          style={[
+                            styles.optionLabel,
+                            isSelected && styles.optionLabelSelected,
+                          ]}
+                        >
+                          {preset.label}
+                        </Text>
+                        <Text style={styles.optionSub}>{preset.subtitle}</Text>
+                      </View>
+                    </View>
+                    <View
+                      style={[
+                        styles.radioOuter,
+                        isSelected && styles.radioOuterSelected,
+                      ]}
+                    >
+                      {isSelected && <View style={styles.radioInner} />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
 
-      {/* Customizable Hearts Selector (shown only in Multi-Hearts mode) */}
-      {selectedMode === 'MULTI_HEARTS' && (
-        <View style={styles.customHeartsBox}>
-          <Text style={styles.subSectionTitle}>CUSTOMIZE NUMBER OF HEARTS</Text>
-          <View style={styles.optionRow}>
-            {[2, 3, 4, 5].map((count) => (
+              {/* Custom Duration Row */}
               <TouchableOpacity
-                key={count}
-                style={[
-                  styles.optionPill,
-                  customHearts === count && styles.optionPillActiveHearts,
-                ]}
-                onPress={() => setCustomHearts(count)}
                 activeOpacity={0.8}
+                onPress={() => {
+                  setIsCustomDuration(true);
+                  setErrorMessage(null);
+                }}
+                style={[
+                  styles.optionCard,
+                  isCustomDuration && styles.optionCardSelected,
+                ]}
               >
-                <Text
+                <View style={styles.optionLeft}>
+                  <View style={[styles.iconCircle, isCustomDuration && styles.iconCircleSelected]}>
+                    <SettingsIcon
+                      size={18}
+                      color={isCustomDuration ? colors.brand.accent : colors.text.secondary}
+                    />
+                  </View>
+                  <View style={styles.customRow}>
+                    <Text
+                      style={[
+                        styles.optionLabel,
+                        isCustomDuration && styles.optionLabelSelected,
+                      ]}
+                    >
+                      Custom Duration
+                    </Text>
+                    {isCustomDuration && (
+                      <View style={styles.customInputWrapper}>
+                        <TextInput
+                          style={styles.customInput}
+                          keyboardType="number-pad"
+                          value={customDurationText}
+                          onChangeText={setCustomDurationText}
+                          maxLength={4}
+                        />
+                        <Text style={styles.unitText}>min</Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+                <View
                   style={[
-                    styles.optionText,
-                    customHearts === count && styles.optionTextActiveHearts,
+                    styles.radioOuter,
+                    isCustomDuration && styles.radioOuterSelected,
                   ]}
                 >
-                  {count} HEARTS
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/* Match Parameters - Duration up to 1 Day (1,440 mins) */}
-      <Text style={styles.sectionTitle}>MATCH DURATION</Text>
-      <Text style={styles.sectionSubTitle}>
-        Total time hunters have to catch all runners (max 1 day)
-      </Text>
-      <View style={styles.optionRow}>
-        {[15, 30, 60, 180, 360, 720, 1440].map((mins) => (
-          <TouchableOpacity
-            key={mins}
-            style={[
-              styles.optionPill,
-              !isCustomDuration && selectedDuration === mins && styles.optionPillActive,
-            ]}
-            onPress={() => handleSelectPresetDuration(mins)}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.optionText,
-                !isCustomDuration && selectedDuration === mins && styles.optionTextActive,
-              ]}
-            >
-              {mins >= 60
-                ? `${mins / 60 >= 24 ? '24h (1D)' : `${mins / 60}h`}`
-                : `${mins}m`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity
-          style={[
-            styles.optionPill,
-            isCustomDuration && styles.optionPillActiveCustom,
-          ]}
-          onPress={() => setIsCustomDuration(true)}
-          activeOpacity={0.8}
-        >
-          <Text
-            style={[
-              styles.optionText,
-              isCustomDuration && styles.optionTextActiveCustom,
-            ]}
-          >
-            ⚙️ CUSTOM
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Custom Duration Input Card */}
-      {isCustomDuration && (
-        <View style={styles.customInputCard}>
-          <View style={styles.customInputHeader}>
-            <Text style={styles.customInputLabel}>CUSTOM MATCH DURATION:</Text>
-            <Text style={styles.customInputVal}>
-              {selectedDuration >= 60
-                ? `${(selectedDuration / 60).toFixed(1).replace(/\.0$/, '')} HRS (${selectedDuration} MINS)`
-                : `${selectedDuration} MINS`}
-            </Text>
-          </View>
-          <View style={styles.customInputRow}>
-            <TextInput
-              style={styles.customTextInput}
-              keyboardType="number-pad"
-              value={customDurationText}
-              onChangeText={handleCustomDurationChange}
-              placeholder="e.g. 90"
-              placeholderTextColor={colors.text.muted}
-            />
-            <Text style={styles.customUnitText}>minutes</Text>
-            <View style={styles.customAdjustGroup}>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustDuration(-60)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>−1h</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustDuration(-15)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>−15m</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustDuration(15)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+15m</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustDuration(60)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+1h</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustDuration(360)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+6h</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-          <Text style={styles.customInputHint}>
-            Set any duration from 5 to 1,440 minutes (up to 24 hours / 1 day).
-          </Text>
-        </View>
-      )}
-
-      {/* Runner Location Reveal Timer (Intuitive wording for Radar Ping) - Up to 1 Day */}
-      <Text style={styles.sectionTitle}>RUNNER LOCATION REVEAL TIMER</Text>
-      <Text style={styles.sectionSubTitle}>
-        How often runner locations ping on hunter compass & map (max 1 day)
-      </Text>
-      <View style={styles.optionRow}>
-        {[15, 30, 60, 120, 300, 600].map((sec) => (
-          <TouchableOpacity
-            key={sec}
-            style={[
-              styles.optionPill,
-              !isCustomPing && selectedPing === sec && styles.optionPillActive,
-            ]}
-            onPress={() => handleSelectPresetPing(sec)}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.optionText,
-                !isCustomPing && selectedPing === sec && styles.optionTextActive,
-              ]}
-            >
-              {sec >= 60 ? `${sec / 60}m` : `${sec}s`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity
-          style={[
-            styles.optionPill,
-            isCustomPing && styles.optionPillActiveCustom,
-          ]}
-          onPress={() => setIsCustomPing(true)}
-          activeOpacity={0.8}
-        >
-          <Text
-            style={[
-              styles.optionText,
-              isCustomPing && styles.optionTextActiveCustom,
-            ]}
-          >
-            ⚙️ CUSTOM
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Custom Location Reveal Input Card */}
-      {isCustomPing && (
-        <View style={styles.customInputCard}>
-          <View style={styles.customInputHeader}>
-            <Text style={styles.customInputLabel}>CUSTOM REVEAL INTERVAL:</Text>
-            <Text style={styles.customInputVal}>
-              {selectedPing >= 3600
-                ? `${(selectedPing / 3600).toFixed(1).replace(/\.0$/, '')} HRS (${selectedPing}s)`
-                : selectedPing >= 60
-                ? `${Math.floor(selectedPing / 60)}m ${selectedPing % 60 ? `${selectedPing % 60}s` : ''} (${selectedPing}s)`
-                : `${selectedPing} SECONDS`}
-            </Text>
-          </View>
-          <View style={styles.customInputRow}>
-            <TextInput
-              style={styles.customTextInput}
-              keyboardType="number-pad"
-              value={customPingText}
-              onChangeText={handleCustomPingChange}
-              placeholder="e.g. 45"
-              placeholderTextColor={colors.text.muted}
-            />
-            <Text style={styles.customUnitText}>seconds</Text>
-            <View style={styles.customAdjustGroup}>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustPing(-30)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>−30s</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustPing(-5)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>−5s</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustPing(5)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+5s</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustPing(30)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+30s</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustPing(300)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+5m</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-          <Text style={styles.customInputHint}>
-            Set any reveal interval from 5 to 86,400 seconds (up to 24 hours / 1 day).
-          </Text>
-        </View>
-      )}
-
-      {/* Play Zone Area / Radius - Up to 400km (400,000m) */}
-      <Text style={styles.sectionTitle}>PLAY ZONE AREA (RADIUS)</Text>
-      <Text style={styles.sectionSubTitle}>
-        Boundary size where all players hunt & evade (up to 400km)
-      </Text>
-      <View style={styles.optionRow}>
-        {[300, 1000, 5000, 25000, 100000, 400000].map((rad) => (
-          <TouchableOpacity
-            key={rad}
-            style={[
-              styles.optionPill,
-              !isCustomRadius && selectedRadius === rad && styles.optionPillActive,
-            ]}
-            onPress={() => handleSelectPresetRadius(rad)}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.optionText,
-                !isCustomRadius && selectedRadius === rad && styles.optionTextActive,
-              ]}
-            >
-              {rad >= 1000 ? `${rad / 1000}km` : `${rad}m`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-        <TouchableOpacity
-          style={[
-            styles.optionPill,
-            isCustomRadius && styles.optionPillActiveCustom,
-          ]}
-          onPress={() => setIsCustomRadius(true)}
-          activeOpacity={0.8}
-        >
-          <Text
-            style={[
-              styles.optionText,
-              isCustomRadius && styles.optionTextActiveCustom,
-            ]}
-          >
-            🎯 CUSTOM
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Custom Radius Input Card */}
-      {isCustomRadius && (
-        <View style={styles.customInputCard}>
-          <View style={styles.customInputHeader}>
-            <Text style={styles.customInputLabel}>CUSTOM ZONE RADIUS:</Text>
-            <Text style={styles.customInputVal}>
-              {selectedRadius >= 1000
-                ? `${(selectedRadius / 1000).toFixed(1).replace(/\.0$/, '')} KM (${selectedRadius.toLocaleString()} METERS)`
-                : `${selectedRadius} METERS`}
-            </Text>
-          </View>
-          <View style={styles.customInputRow}>
-            <TextInput
-              style={styles.customTextInput}
-              keyboardType="number-pad"
-              value={customRadiusText}
-              onChangeText={handleCustomRadiusChange}
-              placeholder="e.g. 5000"
-              placeholderTextColor={colors.text.muted}
-            />
-            <Text style={styles.customUnitText}>meters</Text>
-            <View style={styles.customAdjustGroup}>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustRadius(-1000)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>−1km</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustRadius(-100)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>−100m</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustRadius(100)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+100m</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustRadius(1000)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+1km</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.adjustBtn}
-                onPress={() => handleAdjustRadius(10000)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.adjustBtnText}>+10km</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-          <View style={styles.customRadiusActions}>
-            <Text style={styles.customInputHint}>
-              Set any play area between 50m to 400,000m (400km).
-            </Text>
-            <TouchableOpacity
-              style={styles.openMapBtn}
-              onPress={() => router.push('/map/editor')}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.openMapBtnText}>🗺️ PIN & ADJUST ON MAP</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {/* Play Zone Map Center Origin Option */}
-      <Text style={styles.sectionTitle}>PLAY ZONE MAP CENTER ANCHOR</Text>
-      <View style={styles.modeRow}>
-        <TouchableOpacity
-          style={[
-            styles.modeCard,
-            zoneOriginMode === 'GPS' && styles.modeCardActive,
-          ]}
-          onPress={() => setZoneOriginMode('GPS')}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.modeIcon}>📍</Text>
-          <Text
-            style={[
-              styles.modeTitle,
-              zoneOriginMode === 'GPS' && styles.modeTitleActive,
-            ]}
-          >
-            DEVICE GPS
-          </Text>
-          <Text style={styles.modeDesc}>Centered at Host GPS</Text>
-          <View style={styles.modePillBadge}>
-            <Text style={styles.modePillText}>DEFAULT</Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.modeCard,
-            zoneOriginMode === 'CUSTOM' && styles.modeCardActive,
-          ]}
-          onPress={() => {
-            setZoneOriginMode('CUSTOM');
-            if (!customCenter) {
-              router.push('/map/editor');
-            }
-          }}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.modeIcon}>🎯</Text>
-          <Text
-            style={[
-              styles.modeTitle,
-              zoneOriginMode === 'CUSTOM' && styles.modeTitleActive,
-            ]}
-          >
-            CUSTOM MAP
-          </Text>
-          <Text style={styles.modeDesc}>
-            {customCenter
-              ? `[${customCenter.lat.toFixed(3)}, ${customCenter.lng.toFixed(3)}]`
-              : 'Tap to Select On Map'}
-          </Text>
-          <View style={styles.modePillBadge}>
-            <Text style={styles.modePillText}>MANUAL</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* Play Zone Dynamic Shrink Mode (PUBG / Free Fire) */}
-      <Text style={styles.sectionTitle}>DYNAMIC ZONE SHRINK MODE</Text>
-      <View style={styles.shrinkCol}>
-        <TouchableOpacity
-          style={[
-            styles.shrinkCard,
-            selectedShrinkMode === 'NONE' && styles.shrinkCardActive,
-          ]}
-          onPress={() => setSelectedShrinkMode('NONE')}
-          activeOpacity={0.8}
-        >
-          <View style={styles.shrinkRow}>
-            <Text style={styles.shrinkIcon}>🛡️</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.shrinkTitle}>1. STATIC (NO SHRINK)</Text>
-              <Text style={styles.shrinkDesc}>Fixed boundary throughout the entire match</Text>
-            </View>
-            {selectedShrinkMode === 'NONE' && (
-              <View style={styles.shrinkActiveBadge}>
-                <Text style={styles.shrinkActiveBadgeText}>ACTIVE</Text>
-              </View>
-            )}
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.shrinkCard,
-            selectedShrinkMode === 'CONCENTRIC' && styles.shrinkCardActive,
-          ]}
-          onPress={() => setSelectedShrinkMode('CONCENTRIC')}
-          activeOpacity={0.8}
-        >
-          <View style={styles.shrinkRow}>
-            <Text style={styles.shrinkIcon}>🎯</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.shrinkTitle}>2. CONCENTRIC SHRINK</Text>
-              <Text style={styles.shrinkDesc}>Zone shrinks inwards towards original center anchor</Text>
-            </View>
-            {selectedShrinkMode === 'CONCENTRIC' && (
-              <View style={styles.shrinkActiveBadge}>
-                <Text style={styles.shrinkActiveBadgeText}>ACTIVE</Text>
-              </View>
-            )}
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.shrinkCard,
-            selectedShrinkMode === 'BATTLE_ROYALE' && styles.shrinkCardActiveBR,
-          ]}
-          onPress={() => setSelectedShrinkMode('BATTLE_ROYALE')}
-          activeOpacity={0.8}
-        >
-          <View style={styles.shrinkRow}>
-            <Text style={styles.shrinkIcon}>⚡</Text>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={[styles.shrinkTitle, { color: colors.hunter.primary }]}>
-                  3. BATTLE ROYALE (PUBG / FREE FIRE)
-                </Text>
-                <View style={styles.popularBadge}>
-                  <Text style={styles.popularBadgeText}>POPULAR</Text>
+                  {isCustomDuration && <View style={styles.radioInner} />}
                 </View>
-              </View>
-              <Text style={styles.shrinkDesc}>
-                Next safe white zone appears randomly inside current circle in timed shrink phases
-              </Text>
+              </TouchableOpacity>
             </View>
-            {selectedShrinkMode === 'BATTLE_ROYALE' && (
-              <View style={styles.shrinkActiveBadgeBR}>
-                <Text style={styles.shrinkActiveBadgeText}>ACTIVE</Text>
+
+            {errorMessage && (
+              <View style={styles.errorBox}>
+                <Ionicons name="alert-circle" size={16} color={colors.status.danger} />
+                <Text style={styles.errorText}>{errorMessage}</Text>
               </View>
             )}
+
+            <View style={styles.bottomBar}>
+              <Button
+                title="CONTINUE"
+                variant="gradient"
+                size="lg"
+                fullWidth
+                onPress={handleNextStep1}
+              />
+            </View>
+          </>
+        )}
+
+        {/* ================= STEP 2: LOCATION INTERVAL ================= */}
+        {step === 2 && (
+          <>
+            <Text style={styles.sectionHeader}>LOCATION UPDATE INTERVAL</Text>
+            <Text style={styles.sectionSubtitle}>
+              How often runners' GPS positions update for chasers on the tactical radar.
+            </Text>
+
+            <View style={styles.optionsList}>
+              {INTERVAL_PRESETS.map((preset) => {
+                const isSelected = !isCustomInterval && selectedInterval === preset.seconds;
+                return (
+                  <TouchableOpacity
+                    key={preset.seconds}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setSelectedInterval(preset.seconds);
+                      setIsCustomInterval(false);
+                      setErrorMessage(null);
+                    }}
+                    style={[
+                      styles.optionCard,
+                      isSelected && styles.optionCardSelected,
+                    ]}
+                  >
+                    <View style={styles.optionLeft}>
+                      <View style={[styles.iconCircle, isSelected && styles.iconCircleSelected]}>
+                        {renderIntervalIcon(preset.seconds, isSelected)}
+                      </View>
+                      <View style={styles.optionTextColumn}>
+                        <Text
+                          style={[
+                            styles.optionLabel,
+                            isSelected && styles.optionLabelSelected,
+                          ]}
+                        >
+                          {preset.label}
+                        </Text>
+                        <Text style={styles.optionSub}>{preset.subtitle}</Text>
+                      </View>
+                    </View>
+                    <View
+                      style={[
+                        styles.radioOuter,
+                        isSelected && styles.radioOuterSelected,
+                      ]}
+                    >
+                      {isSelected && <View style={styles.radioInner} />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+
+              {/* Custom Interval Row */}
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => {
+                  setIsCustomInterval(true);
+                  setErrorMessage(null);
+                }}
+                style={[
+                  styles.optionCard,
+                  isCustomInterval && styles.optionCardSelected,
+                ]}
+              >
+                <View style={styles.optionLeft}>
+                  <View style={[styles.iconCircle, isCustomInterval && styles.iconCircleSelected]}>
+                    <SettingsIcon
+                      size={18}
+                      color={isCustomInterval ? colors.brand.accent : colors.text.secondary}
+                    />
+                  </View>
+                  <View style={styles.customRow}>
+                    <Text
+                      style={[
+                        styles.optionLabel,
+                        isCustomInterval && styles.optionLabelSelected,
+                      ]}
+                    >
+                      Custom Interval
+                    </Text>
+                    {isCustomInterval && (
+                      <View style={styles.customInputWrapper}>
+                        <TextInput
+                          style={styles.customInput}
+                          keyboardType="number-pad"
+                          value={customIntervalText}
+                          onChangeText={setCustomIntervalText}
+                          maxLength={4}
+                        />
+                        <Text style={styles.unitText}>sec</Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+                <View
+                  style={[
+                    styles.radioOuter,
+                    isCustomInterval && styles.radioOuterSelected,
+                  ]}
+                >
+                  {isCustomInterval && <View style={styles.radioInner} />}
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {errorMessage && (
+              <View style={styles.errorBox}>
+                <Ionicons name="alert-circle" size={16} color={colors.status.danger} />
+                <Text style={styles.errorText}>{errorMessage}</Text>
+              </View>
+            )}
+
+            <View style={styles.bottomBar}>
+              <Button
+                title="CONTINUE TO PLAY ZONE"
+                variant="gradient"
+                size="lg"
+                fullWidth
+                onPress={handleNextStep2}
+              />
+            </View>
+          </>
+        )}
+
+        {/* ================= STEP 3: PLAY ZONE & POLYGON AREA ================= */}
+        {step === 3 && (
+          <View style={styles.step3Wrapper}>
+            {/* Top Selector: Circle Zone vs Draw Polygon Area vs No Boundary */}
+            <View style={styles.zoneTypeTabs}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => {
+                  setZoneMode('NONE');
+                  setErrorMessage(null);
+                }}
+                style={[
+                  styles.zoneTypeTab,
+                  zoneMode === 'NONE' && styles.zoneTypeTabActive,
+                ]}
+              >
+                <Ionicons
+                  name="power"
+                  size={15}
+                  color={zoneMode === 'NONE' ? '#FFFFFF' : colors.text.primary}
+                />
+                <Text
+                  style={[
+                    styles.zoneTypeTabText,
+                    zoneMode === 'NONE' && styles.zoneTypeTabTextActive,
+                  ]}
+                >
+                  Off
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => {
+                  setZoneMode('CIRCLE');
+                  setErrorMessage(null);
+                }}
+                style={[
+                  styles.zoneTypeTab,
+                  zoneMode === 'CIRCLE' && styles.zoneTypeTabActive,
+                ]}
+              >
+                <TargetIcon
+                  size={15}
+                  color={zoneMode === 'CIRCLE' ? colors.brand.accent : colors.text.primary}
+                />
+                <Text
+                  style={[
+                    styles.zoneTypeTabText,
+                    zoneMode === 'CIRCLE' && styles.zoneTypeTabTextActive,
+                  ]}
+                >
+                  Circle
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => {
+                  setZoneMode('POLYGON');
+                  setErrorMessage(null);
+                }}
+                style={[
+                  styles.zoneTypeTab,
+                  zoneMode === 'POLYGON' && styles.zoneTypeTabActive,
+                ]}
+              >
+                <ShapesIcon
+                  size={15}
+                  color={zoneMode === 'POLYGON' ? colors.brand.accent : colors.text.primary}
+                />
+                <Text
+                  style={[
+                    styles.zoneTypeTabText,
+                    zoneMode === 'POLYGON' && styles.zoneTypeTabTextActive,
+                  ]}
+                >
+                  Custom
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Sub-header instructions / live stats */}
+            {zoneMode === 'NONE' && (
+              <View style={styles.offNotice}>
+                <Ionicons name="information-circle" size={18} color="#2563EB" />
+                <Text style={styles.offNoticeText}>
+                  Boundless play zone: Players can roam anywhere without out-of-bounds penalties.
+                </Text>
+              </View>
+            )}
+
+            {/* Interactive Live Map */}
+            <View style={styles.mapContainer}>
+              <LivePlayZoneMap
+                currentLocation={currentLocation}
+                zoneRadius={circleRadius}
+                fullScreen
+                customCenter={effectiveCenter}
+                onSelectCenter={(coords) => {
+                  if (zoneMode === 'CIRCLE') {
+                    setCircleCenter(coords);
+                  } else if (zoneMode === 'POLYGON' && polygonPoints.length < 12) {
+                    setPolygonPoints([...polygonPoints, coords]);
+                  }
+                }}
+                allowTapToSelectCenter={zoneMode !== 'NONE'}
+                zoneMode={zoneMode}
+                polygonVertices={polygonPoints}
+              />
+
+              {/* Floating polygon tools matching Reference Screenshot 5 */}
+              {zoneMode === 'POLYGON' && (
+                <View style={styles.floatingToolsCard}>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={handleAddPolygonPoint}
+                    style={styles.floatingActionIconBtn}
+                  >
+                    <View style={styles.addIconCircle}>
+                      <PlusIcon size={18} color="#FFFFFF" />
+                    </View>
+                    <Text style={styles.floatingToolLabel}>Add</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={handleUndoPolygonPoint}
+                    disabled={polygonPoints.length === 0}
+                    style={[
+                      styles.floatingActionIconBtn,
+                      polygonPoints.length === 0 && styles.floatingBtnDisabled,
+                    ]}
+                  >
+                    <View style={styles.actionIconCircle}>
+                      <UndoIcon size={16} color={polygonPoints.length === 0 ? '#9CA3AF' : '#1F2937'} />
+                    </View>
+                    <Text style={[styles.floatingToolLabel, polygonPoints.length === 0 && styles.labelDisabled]}>Undo</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={handleClearPolygonPoints}
+                    disabled={polygonPoints.length === 0}
+                    style={[
+                      styles.floatingActionIconBtn,
+                      polygonPoints.length === 0 && styles.floatingBtnDisabled,
+                    ]}
+                  >
+                    <View style={styles.actionIconCircle}>
+                      <TrashIcon size={16} color={polygonPoints.length === 0 ? '#9CA3AF' : colors.status.danger} />
+                    </View>
+                    <Text style={[styles.floatingToolLabel, { color: polygonPoints.length === 0 ? '#9CA3AF' : colors.status.danger }]}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+            {/* Bottom Card Area matching Reference Screenshot 5 */}
+            <View style={styles.bottomCardArea}>
+              {/* Circle Mode: Presets + Custom Radius with 5m - 400km limit */}
+              {zoneMode === 'CIRCLE' && (
+                <View style={styles.radiusControlContainer}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.radiusScroll}
+                  >
+                    {RADIUS_PRESETS.map((preset) => {
+                      const isSelected = !isCustomRadius && circleRadius === preset.meters;
+                      return (
+                        <TouchableOpacity
+                          key={preset.meters}
+                          activeOpacity={0.8}
+                          onPress={() => {
+                            setCircleRadius(preset.meters);
+                            setIsCustomRadius(false);
+                            setErrorMessage(null);
+                          }}
+                          style={[
+                            styles.radiusPill,
+                            isSelected && styles.radiusPillSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.radiusPillText,
+                              isSelected && styles.radiusPillTextSelected,
+                            ]}
+                          >
+                            {preset.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setIsCustomRadius(true);
+                        handleCustomRadiusChange(customRadiusText, customRadiusUnit);
+                      }}
+                      style={[
+                        styles.radiusPill,
+                        isCustomRadius && styles.radiusPillSelected,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.radiusPillText,
+                          isCustomRadius && styles.radiusPillTextSelected,
+                        ]}
+                      >
+                        Custom Radius
+                      </Text>
+                    </TouchableOpacity>
+                  </ScrollView>
+
+                  {/* Custom Radius Input Row (5m to 400km) */}
+                  {isCustomRadius && (
+                    <View style={styles.customRadiusRow}>
+                      <Text style={styles.customRadiusPrompt}>Limit: 5m to 400km</Text>
+                      <View style={styles.customRadiusInputGroup}>
+                        <TextInput
+                          style={styles.customRadiusNumberInput}
+                          keyboardType="decimal-pad"
+                          value={customRadiusText}
+                          onChangeText={(t) => handleCustomRadiusChange(t, customRadiusUnit)}
+                          placeholder="e.g. 500"
+                        />
+                        <View style={styles.unitToggleGroup}>
+                          <TouchableOpacity
+                            style={[styles.unitBtn, customRadiusUnit === 'm' && styles.unitBtnActive]}
+                            onPress={() => handleToggleUnit('m')}
+                          >
+                            <Text style={[styles.unitBtnText, customRadiusUnit === 'm' && styles.unitBtnTextActive]}>
+                              m
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.unitBtn, customRadiusUnit === 'km' && styles.unitBtnActive]}
+                            onPress={() => handleToggleUnit('km')}
+                          >
+                            <Text style={[styles.unitBtnText, customRadiusUnit === 'km' && styles.unitBtnTextActive]}>
+                              km
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Polygon Mode Metrics: POINTS & AREA Cards (Exact match to Screenshot 5) */}
+              {zoneMode === 'POLYGON' && (
+                <View style={styles.metricsRow}>
+                  <View style={styles.metricCard}>
+                    <Text style={styles.metricHeader}>POINTS</Text>
+                    <Text style={styles.metricValue}>{polygonPoints.length}</Text>
+                  </View>
+                  <View style={styles.metricCard}>
+                    <Text style={styles.metricHeader}>AREA</Text>
+                    <Text style={styles.metricValue}>{formatArea(polygonArea)}</Text>
+                  </View>
+                </View>
+              )}
+
+              {errorMessage && (
+                <View style={styles.errorBoxStep3}>
+                  <Ionicons name="alert-circle" size={16} color={colors.status.danger} />
+                  <Text style={styles.errorText}>{errorMessage}</Text>
+                </View>
+              )}
+
+              {/* Gradient Action Button (Exact match to Screenshot 5) */}
+              <View style={styles.applyBtnWrapper}>
+                <Button
+                  title={
+                    isSaving || isLoading
+                      ? isEditingFromLobby
+                        ? 'SAVING PLAY ZONE...'
+                        : 'CREATING MATCH...'
+                      : isEditingFromLobby
+                      ? 'Apply'
+                      : 'CREATE MATCH'
+                  }
+                  variant="gradient"
+                  size="lg"
+                  fullWidth
+                  loading={isSaving || isLoading}
+                  disabled={isSaving || isLoading}
+                  onPress={handleSaveOrLaunchMatch}
+                />
+              </View>
+            </View>
           </View>
-        </TouchableOpacity>
+        )}
       </View>
-
-      {/* Configuration Summary */}
-      <Card variant="glass" style={styles.summaryCard}>
-        <Text style={styles.summaryTitle}>MATCH PARAMETERS SUMMARY</Text>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Game Mode:</Text>
-          <Text style={styles.summaryVal}>
-            {selectedMode === 'ONE_CATCH'
-              ? '⚡ Sudden Death (1 Catch = Out)'
-              : `❤️ Survival Lives (${customHearts} Hearts)`}
-          </Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Time Limit:</Text>
-          <Text style={styles.summaryVal}>
-            {selectedDuration >= 60
-              ? `${(selectedDuration / 60).toFixed(1).replace(/\.0$/, '')} Hours (${selectedDuration} Mins)`
-              : `${selectedDuration} Minutes`}
-          </Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Location Reveal Time:</Text>
-          <Text style={styles.summaryVal}>
-            {selectedPing >= 3600
-              ? `Every ${(selectedPing / 3600).toFixed(1).replace(/\.0$/, '')} Hours (${selectedPing}s)`
-              : selectedPing >= 60
-              ? `Every ${Math.floor(selectedPing / 60)}m ${selectedPing % 60 ? `${selectedPing % 60}s` : ''} (${selectedPing}s)`
-              : `Every ${selectedPing} Seconds`}
-          </Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Play Zone Area:</Text>
-          <Text style={styles.summaryVal}>
-            {selectedRadius >= 1000
-              ? `${(selectedRadius / 1000).toFixed(1).replace(/\.0$/, '')}km (${selectedRadius.toLocaleString()}m Radius)`
-              : `${selectedRadius}m Radius`}
-          </Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Play Zone Center:</Text>
-          <Text style={styles.summaryVal}>
-            {zoneOriginMode === 'CUSTOM' && customCenter
-              ? `🎯 Custom [${customCenter.lat.toFixed(4)}, ${customCenter.lng.toFixed(4)}]`
-              : '📍 Current Device GPS'}
-          </Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Zone Shrink Mode:</Text>
-          <Text style={[styles.summaryVal, { color: selectedShrinkMode === 'BATTLE_ROYALE' ? colors.hunter.primary : colors.text.primary }]}>
-            {selectedShrinkMode === 'NONE'
-              ? '🛡️ Static (No Shrink)'
-              : selectedShrinkMode === 'CONCENTRIC'
-              ? '🎯 Concentric (Center Inwards)'
-              : '⚡ Battle Royale (Dynamic Circles)'}
-          </Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Catch Verification:</Text>
-          <Text style={styles.summaryVal}>15 Meters Proximity + PIN</Text>
-        </View>
-
-        <Button
-          title="🗺️ CONFIGURE MAP & ANCHOR"
-          variant="secondary"
-          size="sm"
-          onPress={() => router.push('/map/editor')}
-          style={{ marginTop: spacing.md }}
-        />
-      </Card>
-
-      <Button
-        title={isLoading ? 'CREATING MATCH...' : 'CREATE MATCH ROOM'}
-        variant="gradient"
-        size="lg"
-        fullWidth
-        loading={isLoading}
-        onPress={handleCreate}
-        style={styles.submitBtn}
-      />
-    </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    padding: spacing.md,
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  containerStep3: {
     flex: 1,
     backgroundColor: colors.background.base,
   },
-  content: {
-    padding: spacing.lg,
-  },
-  sectionTitle: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    letterSpacing: typography.letterSpacing.wide,
-    fontWeight: '800',
-    marginTop: spacing.md,
-    marginBottom: spacing.xs + 2,
-  },
-  sectionSubTitle: {
-    color: colors.text.muted,
-    fontSize: 10,
-    marginTop: -2,
-    marginBottom: spacing.xs + 4,
-    lineHeight: 14,
-  },
-  subSectionTitle: {
-    color: colors.hunter.primary,
-    fontSize: 10,
-    letterSpacing: 1,
-    fontWeight: '800',
-    marginBottom: spacing.xs,
-  },
-  modeRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  modeCard: {
+  step3Wrapper: {
     flex: 1,
-    padding: spacing.md,
-    backgroundColor: colors.background.surfaceCard,
-    borderColor: colors.border.glass,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  sectionHeader: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: colors.text.primary,
+    marginTop: spacing.sm,
+    letterSpacing: typography.letterSpacing.tactical,
+  },
+  sectionSubtitle: {
+    fontSize: typography.fontSize.xs,
+    color: colors.text.muted,
+    marginTop: 4,
+    marginBottom: spacing.lg,
+  },
+  optionsList: {
+    gap: spacing.sm,
+  },
+  optionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.background.surface,
     borderWidth: 1.5,
-    borderRadius: borderRadius.md,
+    borderColor: colors.border.default,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 14,
+    ...shadows.sm,
+  },
+  optionCardSelected: {
+    borderColor: colors.brand.accent,
+    backgroundColor: '#FFF7F5',
+  },
+  optionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  iconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modeCardActive: {
-    backgroundColor: 'rgba(232, 93, 59, 0.16)',
-    borderColor: colors.brand.gradientMid,
+  iconCircleSelected: {
+    backgroundColor: '#FEE2E2',
   },
-  modeIcon: {
-    fontSize: 22,
-    marginBottom: 4,
-  },
-  modeTitle: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  modeTitleActive: {
-    color: colors.text.primary,
-  },
-  modeDesc: {
-    color: colors.text.muted,
-    fontSize: 9,
-    textAlign: 'center',
-    marginTop: 2,
-    marginBottom: 6,
-  },
-  modePillBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: borderRadius.full,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  modePillText: {
-    color: colors.brand.gradientEnd,
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  customHeartsBox: {
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-    borderWidth: 1,
-    borderRadius: borderRadius.md,
-    padding: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  optionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-    gap: spacing.xs,
-  },
-  optionPill: {
+  optionTextColumn: {
     flex: 1,
-    paddingVertical: spacing.sm + 4,
-    backgroundColor: colors.background.surfaceCard,
-    borderColor: colors.border.glass,
-    borderWidth: 1.5,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
   },
-  optionPillActive: {
-    backgroundColor: 'rgba(232, 93, 59, 0.15)',
-    borderColor: colors.brand.gradientMid,
-  },
-  optionPillActiveHearts: {
-    backgroundColor: 'rgba(239, 68, 68, 0.20)',
-    borderColor: colors.status.danger,
-  },
-  optionText: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  optionTextActive: {
-    color: colors.brand.gradientEnd,
-  },
-  optionTextActiveHearts: {
-    color: '#EF4444',
-  },
-  summaryCard: {
-    marginTop: spacing.lg,
-    padding: spacing.md,
-  },
-  summaryTitle: {
-    color: colors.hunter.primary,
-    fontWeight: '900',
-    fontSize: typography.fontSize.xs,
-    letterSpacing: typography.letterSpacing.tactical,
-    marginBottom: spacing.sm,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginVertical: 4,
-  },
-  summaryLabel: {
-    color: colors.text.muted,
-    fontSize: typography.fontSize.xs,
-  },
-  summaryVal: {
+  optionLabel: {
+    fontSize: typography.fontSize.base,
+    fontWeight: '700',
     color: colors.text.primary,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '800',
   },
-  shrinkCol: {
-    gap: spacing.xs + 2,
-    marginBottom: spacing.sm,
+  optionLabelSelected: {
+    color: colors.brand.accent,
   },
-  shrinkCard: {
-    backgroundColor: '#121620',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderWidth: 1.5,
-    borderRadius: borderRadius.md,
-    padding: spacing.sm + 4,
+  optionSub: {
+    fontSize: 11,
+    color: colors.text.muted,
+    marginTop: 2,
+    fontWeight: '500',
   },
-  shrinkCardActive: {
-    borderColor: colors.brand.gradientMid,
-    backgroundColor: 'rgba(232, 93, 59, 0.12)',
+  radioOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  shrinkCardActiveBR: {
-    borderColor: colors.hunter.primary,
-    backgroundColor: 'rgba(255, 59, 48, 0.15)',
+  radioOuterSelected: {
+    borderColor: colors.brand.accent,
   },
-  shrinkRow: {
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.brand.accent,
+  },
+  customRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    flex: 1,
   },
-  shrinkIcon: {
-    fontSize: 22,
-  },
-  shrinkTitle: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  shrinkDesc: {
-    color: colors.text.muted,
-    fontSize: 10,
-    marginTop: 2,
-    lineHeight: 14,
-  },
-  popularBadge: {
-    backgroundColor: colors.hunter.primary,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  popularBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  shrinkActiveBadge: {
-    backgroundColor: 'rgba(232, 93, 59, 0.25)',
-    borderColor: colors.brand.gradientMid,
-    borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.sm,
-  },
-  shrinkActiveBadgeBR: {
-    backgroundColor: 'rgba(255, 59, 48, 0.25)',
-    borderColor: colors.hunter.primary,
-    borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.sm,
-  },
-  shrinkActiveBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  optionPillActiveCustom: {
-    backgroundColor: 'rgba(0, 229, 255, 0.16)',
-    borderColor: colors.runner.primary,
-  },
-  optionTextActiveCustom: {
-    color: colors.runner.primary,
-  },
-  customInputCard: {
-    backgroundColor: '#121620',
-    borderColor: 'rgba(0, 229, 255, 0.3)',
-    borderWidth: 1.5,
-    borderRadius: borderRadius.md,
-    padding: spacing.sm + 4,
-    marginBottom: spacing.sm,
-  },
-  customInputHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  customInputLabel: {
-    color: colors.text.muted,
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  customInputVal: {
-    color: colors.runner.primary,
-    fontSize: 11,
-    fontWeight: '900',
-    fontFamily: typography.fontFamily.mono,
-  },
-  customInputRow: {
+  customInputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs + 2,
-  },
-  customTextInput: {
-    backgroundColor: '#1A2130',
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
+    borderColor: colors.border.default,
     borderRadius: borderRadius.sm,
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '800',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    width: 80,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  customInput: {
+    fontSize: typography.fontSize.base,
+    fontWeight: '700',
+    color: colors.text.primary,
+    minWidth: 40,
     textAlign: 'center',
   },
-  customUnitText: {
-    color: colors.text.secondary,
-    fontSize: 11,
-    fontWeight: '700',
+  unitText: {
+    fontSize: typography.fontSize.xs,
+    color: colors.text.muted,
+    marginLeft: 2,
   },
-  customAdjustGroup: {
+  errorBox: {
     flexDirection: 'row',
-    gap: 4,
-    marginLeft: 'auto',
-  },
-  adjustBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.08)',
     borderWidth: 1,
-    borderRadius: borderRadius.sm,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+    marginTop: spacing.md,
+    gap: 6,
   },
-  adjustBtnText: {
-    color: colors.runner.primary,
+  errorBoxStep3: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    borderRadius: borderRadius.md,
+    padding: spacing.xs,
+    marginBottom: spacing.xs,
+    gap: 6,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: typography.fontSize.xs,
+    color: colors.status.danger,
+    fontWeight: '600',
+  },
+  bottomBar: {
+    marginTop: spacing.xl,
+    marginBottom: spacing.md,
+  },
+
+  // Step 3 specific styles
+  zoneTypeTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    padding: 4,
+    borderRadius: borderRadius.lg,
+    marginHorizontal: spacing.md,
+    marginVertical: spacing.xs + 2,
+    gap: 4,
+  },
+  zoneTypeTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: borderRadius.md,
+    gap: 6,
+  },
+  zoneTypeTabActive: {
+    backgroundColor: '#FFFFFF',
+    ...shadows.sm,
+  },
+  zoneTypeTabText: {
+    fontSize: typography.fontSize.xs + 1,
+    fontWeight: '700',
+    color: colors.text.secondary,
+  },
+  zoneTypeTabTextActive: {
+    color: colors.brand.accent,
+  },
+  offNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    padding: spacing.sm,
+    marginHorizontal: spacing.md,
+    marginBottom: 6,
+    borderRadius: borderRadius.md,
+    gap: 6,
+  },
+  offNoticeText: {
+    flex: 1,
+    fontSize: typography.fontSize.xs,
+    color: '#1E40AF',
+    fontWeight: '500',
+  },
+  mapContainer: {
+    flex: 1,
+    position: 'relative',
+    minHeight: 280,
+  },
+  // Floating Tool Column matching Screenshot 5 (Centered on right edge away from map controls)
+  floatingToolsCard: {
+    position: 'absolute',
+    top: '34%',
+    right: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    gap: 8,
+    alignItems: 'center',
+    zIndex: 30,
+    ...shadows.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.08)',
+  },
+  floatingActionIconBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  addIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.brand.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.brand.accent,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  actionIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  floatingToolLabel: {
     fontSize: 10,
     fontWeight: '800',
+    color: '#374151',
+    marginTop: 2,
   },
-  customInputHint: {
-    color: colors.text.muted,
-    fontSize: 9,
-    marginTop: 6,
+  labelDisabled: {
+    color: '#9CA3AF',
   },
-  customRadiusActions: {
-    marginTop: 6,
+  floatingBtnDisabled: {
+    opacity: 0.35,
+  },
+  bottomCardArea: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    ...shadows.lg,
+    borderTopWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  // Metric Cards (POINTS & AREA) matching Screenshot 5
+  metricsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 12,
+    marginBottom: spacing.md,
   },
-  openMapBtn: {
-    backgroundColor: 'rgba(232, 93, 59, 0.2)',
-    borderColor: colors.brand.gradientMid,
+  metricCard: {
+    flex: 1,
+    backgroundColor: '#F3F4F6',
+    borderRadius: borderRadius.md,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  metricHeader: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.text.muted,
+    letterSpacing: 0.8,
+    marginBottom: 4,
+  },
+  metricValue: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: colors.text.primary,
+  },
+  applyBtnWrapper: {
+    marginTop: 2,
+  },
+
+  // Circle radius styling
+  radiusControlContainer: {
+    marginBottom: spacing.md,
+  },
+  radiusScroll: {
+    gap: 8,
+  },
+  radiusPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#F3F4F6',
     borderWidth: 1,
+    borderColor: colors.border.default,
+  },
+  radiusPillSelected: {
+    backgroundColor: colors.brand.accent,
+    borderColor: colors.brand.accent,
+  },
+  radiusPillText: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    color: colors.text.primary,
+  },
+  radiusPillTextSelected: {
+    color: '#FFFFFF',
+  },
+  customRadiusRow: {
+    marginTop: 10,
+    backgroundColor: '#F9FAFB',
+    padding: 10,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+  },
+  customRadiusPrompt: {
+    fontSize: 11,
+    color: colors.text.muted,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  customRadiusInputGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  customRadiusNumberInput: {
+    flex: 1,
+    height: 38,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.border.default,
     borderRadius: borderRadius.sm,
     paddingHorizontal: 10,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text.primary,
+  },
+  unitToggleGroup: {
+    flexDirection: 'row',
+    borderRadius: borderRadius.sm,
+    backgroundColor: '#E5E7EB',
+    padding: 2,
+  },
+  unitBtn: {
+    paddingHorizontal: 12,
     paddingVertical: 6,
+    borderRadius: borderRadius.sm,
   },
-  openMapBtnText: {
-    color: colors.brand.gradientEnd,
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 0.5,
+  unitBtnActive: {
+    backgroundColor: colors.brand.accent,
   },
-  submitBtn: {
-    marginTop: spacing.xl,
+  unitBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.text.primary,
+  },
+  unitBtnTextActive: {
+    color: '#FFFFFF',
   },
 });
