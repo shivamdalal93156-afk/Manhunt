@@ -4,11 +4,13 @@
     "slug": "gps-manhunt",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "scheme": "manhunt",
     "icon": "./assets/icon.png",
     "splash": {
-      "backgroundColor": "#0B0E14"
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F8F9FA"
     },
     "ios": {
       "supportsTablet": false,
@@ -25,9 +27,10 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0B0E14"
+        "backgroundColor": "#F8F9FA"
       },
       "package": "com.manhunt.gpsmanhunt",
+      "versionCode": 1,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
@@ -44,7 +47,10 @@
           "locationAlwaysAndWhenInUsePermission": "Allow GPS Manhunt to track your position while a chase match is active."
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "@react-native-google-signin/google-signin",
+      "expo-image-picker",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
