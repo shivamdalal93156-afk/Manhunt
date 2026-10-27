@@ -25,6 +25,7 @@ const WARNING_ZONE_RADIUS = DIAL_RADIUS * 0.70; // 35m - 100m
 const OUTER_ZONE_RADIUS = DIAL_RADIUS * 0.94; // 100m - 300m
 
 import { ZoneEvaluationResult } from '@/lib/geo/battleRoyaleZone';
+import { defaultGPSFilter } from '@/lib/geo/gpsFilter';
 
 export interface ProcessedHunterThreat {
   playerId: string;
@@ -109,7 +110,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
 
     // Process Hunters
     for (const h of hunters) {
-      const dist = haversineDistance(effectiveLoc, {
+      const rawDist = haversineDistance(effectiveLoc, {
         latitude: h.latitude,
         longitude: h.longitude,
       });
@@ -117,7 +118,8 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         latitude: h.latitude,
         longitude: h.longitude,
       });
-      const relBearing = relativeBearing(effectiveHeading, bearing) ?? 0;
+      // Stabilize distance readout so stationary GPS drift (<3m) does not jump
+      const dist = defaultGPSFilter.smoothDistance(h.playerId, rawDist);
 
       let threatLevel: 'DANGER' | 'WARNING' | 'AWARENESS' = 'AWARENESS';
       let r = 0;
@@ -134,7 +136,8 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         r = WARNING_ZONE_RADIUS + 4 + frac * (OUTER_ZONE_RADIUS - WARNING_ZONE_RADIUS - 6);
       }
 
-      const rad = ((relBearing - 90) * Math.PI) / 180;
+      // North-Up Dial: 0° is North (top), 90° is East (right), 180° is South (bottom), 270° is West (left)
+      const rad = ((bearing - 90) * Math.PI) / 180;
       const rawX = DIAL_RADIUS + r * Math.cos(rad);
       const rawY = DIAL_RADIUS + r * Math.sin(rad);
 
@@ -142,7 +145,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         playerId: h.playerId,
         displayName: h.displayName || 'Hunter',
         distanceMeters: dist,
-        relativeBearingDegrees: relBearing,
+        relativeBearingDegrees: bearing,
         threatLevel,
         targetType: 'HUNTER',
         r,
@@ -153,7 +156,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
 
     // Process Friendly Runners (allies)
     for (const fr of friendlyRunners) {
-      const dist = haversineDistance(effectiveLoc, {
+      const rawDist = haversineDistance(effectiveLoc, {
         latitude: fr.latitude,
         longitude: fr.longitude,
       });
@@ -161,7 +164,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         latitude: fr.latitude,
         longitude: fr.longitude,
       });
-      const relBearing = relativeBearing(effectiveHeading, bearing) ?? 0;
+      const dist = defaultGPSFilter.smoothDistance(fr.playerId, rawDist);
 
       let r = 0;
       if (dist <= 35) {
@@ -174,7 +177,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         r = WARNING_ZONE_RADIUS + 4 + frac * (OUTER_ZONE_RADIUS - WARNING_ZONE_RADIUS - 6);
       }
 
-      const rad = ((relBearing - 90) * Math.PI) / 180;
+      const rad = ((bearing - 90) * Math.PI) / 180;
       const rawX = DIAL_RADIUS + r * Math.cos(rad);
       const rawY = DIAL_RADIUS + r * Math.sin(rad);
 
@@ -182,7 +185,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         playerId: fr.playerId,
         displayName: fr.displayName || 'Ally',
         distanceMeters: dist,
-        relativeBearingDegrees: relBearing,
+        relativeBearingDegrees: bearing,
         threatLevel: 'FRIENDLY',
         targetType: 'RUNNER',
         r,
@@ -307,17 +310,16 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
 
     const dist = haversineDistance(effectiveLoc, target.center);
     const bearing = initialBearing(effectiveLoc, target.center);
-    const relBearing = relativeBearing(effectiveHeading, bearing) ?? 0;
 
     return {
-      angle: relBearing,
-      cardinal: getCardinal(relBearing),
+      angle: bearing,
+      cardinal: getCardinal(bearing),
       distanceMeters: Math.round(dist),
       isOutside: !dynamicZone.isInsideActiveZone,
       phaseState: dynamicZone.phaseState,
       phaseText: `PHASE ${dynamicZone.phaseNumber}/${dynamicZone.totalPhases}`,
     };
-  }, [dynamicZone, runnerLocation, deviceHeading]);
+  }, [dynamicZone, runnerLocation]);
 
   const nearestHunter = processedHunters[0];
 

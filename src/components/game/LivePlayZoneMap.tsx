@@ -516,13 +516,19 @@ export const LivePlayZoneMap: React.FC<LivePlayZoneMapProps> = ({
 
         {/* Dynamic Safe Zone Battle Royale Status Banner */}
         {dynamicPhaseText && (
-          <View style={styles.phaseBanner} pointerEvents="none">
+          <View
+            style={[
+              styles.phaseBanner,
+              fullScreen && styles.phaseBannerFullScreen,
+            ]}
+            pointerEvents="none"
+          >
             <Text style={styles.phaseBannerText}>{dynamicPhaseText}</Text>
           </View>
         )}
 
-        {/* Next Safe Zone Circle (Battle Royale PUBG / Free Fire Algorithm) */}
-        {dynamicNextSafeCircle && (() => {
+        {/* Next Safe Zone Circle (Only in CIRCLE mode; Polygon has its own safe polygon ghost) */}
+        {zoneMode === 'CIRCLE' && dynamicNextSafeCircle && (() => {
           const nextPx = getPixelCoord(
             dynamicNextSafeCircle.center.latitude,
             dynamicNextSafeCircle.center.longitude
@@ -618,24 +624,46 @@ export const LivePlayZoneMap: React.FC<LivePlayZoneMapProps> = ({
 
             {/* Next Safe Polygon Warning Boundary (Dashed White Ghost) */}
             {dynamicNextSafePolygon && dynamicNextSafePolygon.length >= 3 && (
-              <Svg
-                style={StyleSheet.absoluteFillObject}
-                pointerEvents="none"
-              >
-                <Polygon
-                  points={dynamicNextSafePolygon
-                    .map((v) => {
-                      const p = getPixelCoord(v.latitude, v.longitude);
-                      return `${p.x},${p.y}`;
-                    })
-                    .join(' ')}
-                  fill="none"
-                  stroke="#FFFFFF"
-                  strokeWidth={2}
-                  strokeDasharray="6, 6"
-                  strokeLinejoin="round"
-                />
-              </Svg>
+              <>
+                <Svg
+                  style={StyleSheet.absoluteFillObject}
+                  pointerEvents="none"
+                >
+                  <Polygon
+                    points={dynamicNextSafePolygon
+                      .map((v) => {
+                        const p = getPixelCoord(v.latitude, v.longitude);
+                        return `${p.x},${p.y}`;
+                      })
+                      .join(' ')}
+                    fill="rgba(255, 255, 255, 0.08)"
+                    stroke="#FFFFFF"
+                    strokeWidth={2.5}
+                    strokeDasharray="8, 6"
+                    strokeLinejoin="round"
+                  />
+                </Svg>
+                {(() => {
+                  const firstPt = getPixelCoord(
+                    dynamicNextSafePolygon[0].latitude,
+                    dynamicNextSafePolygon[0].longitude
+                  );
+                  return (
+                    <View
+                      pointerEvents="none"
+                      style={[
+                        styles.nextSafeTag,
+                        {
+                          left: firstPt.x - 55,
+                          top: firstPt.y - 24,
+                        },
+                      ]}
+                    >
+                      <Text style={styles.nextSafeTagText}>WHITE SAFE ZONE</Text>
+                    </View>
+                  );
+                })()}
+              </>
             )}
 
             {/* Connecting Edge Line for 2 Vertices */}
@@ -1348,12 +1376,22 @@ const styles = StyleSheet.create({
     top: 10,
     left: 10,
     backgroundColor: 'rgba(255, 30, 30, 0.92)',
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 5,
-    borderRadius: borderRadius.sm,
+    borderRadius: borderRadius.full,
     borderColor: '#ffffff',
     borderWidth: 1,
     zIndex: 28,
+  },
+  phaseBannerFullScreen: {
+    top: 96,
+    left: undefined,
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 8,
   },
   phaseBannerText: {
     color: '#ffffff',

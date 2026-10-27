@@ -165,8 +165,14 @@ export default function LobbyScreen() {
 
   const getPlayZoneLabel = () => {
     if (!playZone || (playZone as any).mode === 'NONE') return 'Off (Infinite)';
-    if (playZone.type === 'polygon') return 'Custom Polygon';
-    return `${playZone.radiusMeters || 500}m Circle`;
+    const shrink =
+      settings?.zoneShrinkMode === 'BATTLE_ROYALE' || playZone.shrinkMode === 'BATTLE_ROYALE'
+        ? ' (Danger)'
+        : settings?.zoneShrinkMode === 'CONCENTRIC' || playZone.shrinkMode === 'CONCENTRIC'
+        ? ' (Shrink)'
+        : '';
+    if (playZone.type === 'polygon') return `Polygon${shrink}`;
+    return `${playZone.radiusMeters || 500}m${shrink}`;
   };
 
   return (

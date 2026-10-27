@@ -74,7 +74,7 @@ class LobbyService {
     }
 
     const runnerHearts = options.runnerHearts ?? 3;
-    const zoneShrinkMode: ZoneShrinkMode = options.zoneShrinkMode ?? 'NONE';
+    const zoneShrinkMode: ZoneShrinkMode = options.zoneShrinkMode ?? options.playZone?.shrinkMode ?? 'NONE';
     const allowSpectators = options.allowSpectators ?? true;
 
     const settings: MatchSettings = {
@@ -240,8 +240,16 @@ class LobbyService {
         maxPlayers: gData?.settings?.max_players ?? gData?.settings?.maxPlayers ?? 30,
         runnerHearts,
         catchRadiusMeters: gData?.settings?.catch_radius_meters ?? gData?.settings?.catchRadiusMeters ?? 15,
+        zoneShrinkMode: gData?.settings?.zone_shrink_mode ?? gData?.settings?.zoneShrinkMode ?? gData?.play_zone?.shrinkMode ?? 'NONE',
+        allowSpectators: gData?.settings?.allow_spectators ?? gData?.settings?.allowSpectators ?? true,
+        tacticalAbilities: gData?.settings?.tactical_abilities ?? gData?.settings?.tacticalAbilities,
       },
-      playZone: gData?.play_zone || { type: 'circle', radiusMeters: 500 },
+      playZone: gData?.play_zone
+        ? {
+            ...gData.play_zone,
+            shrinkMode: gData.play_zone?.shrinkMode ?? gData.play_zone?.shrink_mode ?? gData?.settings?.zone_shrink_mode ?? 'NONE',
+          }
+        : { type: 'circle', radiusMeters: 500, shrinkMode: 'NONE' },
       myPlayerId: data.player_id,
       myRole: data.role || preferredRole,
       isHost: !!data.is_host,
@@ -499,6 +507,12 @@ class LobbyService {
     const updatePayload: Record<string, any> = { settings: newSettings };
     if (playZoneUpdate !== undefined) {
       updatePayload.play_zone = playZoneUpdate;
+    } else if (settingsUpdate.zoneShrinkMode !== undefined && game.play_zone) {
+      updatePayload.play_zone = {
+        ...game.play_zone,
+        shrinkMode: settingsUpdate.zoneShrinkMode,
+        shrink_mode: settingsUpdate.zoneShrinkMode,
+      };
     }
 
     const { error: updateErr } = await supabase
@@ -562,8 +576,16 @@ class LobbyService {
         maxPlayers: game.settings?.max_players ?? game.settings?.maxPlayers ?? 30,
         runnerHearts: game.settings?.runner_hearts ?? game.settings?.runnerHearts ?? 3,
         catchRadiusMeters: game.settings?.catch_radius_meters ?? game.settings?.catchRadiusMeters ?? 15,
+        zoneShrinkMode: game.settings?.zone_shrink_mode ?? game.settings?.zoneShrinkMode ?? game.play_zone?.shrinkMode ?? 'NONE',
+        allowSpectators: game.settings?.allow_spectators ?? game.settings?.allowSpectators ?? true,
+        tacticalAbilities: game.settings?.tactical_abilities ?? game.settings?.tacticalAbilities,
       },
-      playZone: game.play_zone || { type: 'circle', radiusMeters: 500 },
+      playZone: game.play_zone
+        ? {
+            ...game.play_zone,
+            shrinkMode: game.play_zone?.shrinkMode ?? game.play_zone?.shrink_mode ?? game.settings?.zone_shrink_mode ?? 'NONE',
+          }
+        : { type: 'circle', radiusMeters: 500, shrinkMode: 'NONE' },
       hostProfileId: game.host_profile_id,
       players: mappedPlayers,
     };

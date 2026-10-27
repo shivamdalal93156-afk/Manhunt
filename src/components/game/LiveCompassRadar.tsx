@@ -4,6 +4,7 @@ import Svg, { Circle, Line } from 'react-native-svg';
 import { GPSLocation } from '@/types/geo';
 import { haversineDistance } from '@/lib/geo/distance';
 import { initialBearing } from '@/lib/geo/bearing';
+import { defaultGPSFilter } from '@/lib/geo/gpsFilter';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const DIAL_SIZE = Math.min(SCREEN_WIDTH - 64, 320);
@@ -54,19 +55,19 @@ export const LiveCompassRadar: React.FC<LiveCompassRadarProps> = ({
     let bearing = 0;
 
     if (currentLocation) {
-      dist = haversineDistance(currentLocation, {
+      const rawDist = haversineDistance(currentLocation, {
         latitude: hunter.latitude,
         longitude: hunter.longitude,
       });
+      dist = defaultGPSFilter.smoothDistance(hunter.id, rawDist);
       bearing = initialBearing(currentLocation, {
         latitude: hunter.latitude,
         longitude: hunter.longitude,
       });
     }
 
-    // Adjust for compass heading
-    const relAngle = bearing - headingDegrees;
-    const rad = ((relAngle - 90) * Math.PI) / 180;
+    // North-Up Dial: 0° is North (top)
+    const rad = ((bearing - 90) * Math.PI) / 180;
 
     // Scale distance to radius
     const scale = (RADIUS - 25) / maxRange;

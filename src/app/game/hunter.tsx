@@ -24,6 +24,7 @@ import { LivePlayZoneMap, MapViewMode } from '@/components/game/LivePlayZoneMap'
 import { GameBottomDrawer, DrawerPlayerItem } from '@/components/game/GameBottomDrawer';
 import { useLocation } from '@/hooks/useLocation';
 import { haversineDistance } from '@/lib/geo/distance';
+import { defaultGPSFilter } from '@/lib/geo/gpsFilter';
 import { AbilityType, ActiveEffect, RunnerSnapshot } from '@/types/game';
 import { evaluateDynamicZone } from '@/lib/geo/battleRoyaleZone';
 import { gameService, ChatMessageBroadcast } from '@/services/game/gameService';
@@ -208,28 +209,47 @@ export default function HunterGameScreen() {
     return () => clearInterval(interval);
   }, [router]);
 
-  // Continuous broadcast of Hunter's own GPS
-  useEffect(() => {
-    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
-
-    gameService.broadcastLocation(
-      session.gameId,
-      session.myPlayerId,
-      'HUNTER',
-      me?.displayName ?? 'Chaser',
-      currentLocation
-    );
-  }, [currentLocation, session?.gameId, session?.myPlayerId, me?.displayName]);
-
-  // Evaluated Dynamic Safe Zone
+  // Match duration and elapsed time tracking
   const totalMatchDurationMin =
     lobbyState?.settings?.durationMinutes ?? session?.settings?.durationMinutes ?? 30;
   const matchElapsedSec = Math.max(0, totalMatchDurationMin * 60 - timeRemaining);
 
+  // Live Location Ping Interval Countdown: synchronized across all players
+  const pingIntervalSec =
+    lobbyState?.settings?.locationPingIntervalSeconds ??
+    session?.settings?.locationPingIntervalSeconds ??
+    30;
+  const secondsUntilNextPing =
+    pingIntervalSec > 0
+      ? pingIntervalSec - (matchElapsedSec % pingIntervalSec)
+      : 0;
+
+  // Continuous broadcast of Hunter's own GPS with stationary deadband filter
+  useEffect(() => {
+    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
+
+    // Filter location to eliminate stationary jitter
+    const filteredLoc = defaultGPSFilter.filterLocation(currentLocation);
+
+    // Gated broadcast: only send when motion >= 3m or heartbeat (5s) to save network requests
+    if (defaultGPSFilter.shouldBroadcast(filteredLoc)) {
+      gameService.broadcastLocation(
+        session.gameId,
+        session.myPlayerId,
+        'HUNTER',
+        me?.displayName ?? 'Chaser',
+        filteredLoc
+      );
+    }
+  }, [currentLocation, session?.gameId, session?.myPlayerId, me?.displayName]);
+
+  // Evaluated Dynamic Safe Zone (Shrink Mode)
   const dynamicZone = React.useMemo(() => {
     const shrinkMode =
       lobbyState?.settings?.zoneShrinkMode ??
+      lobbyState?.playZone?.shrinkMode ??
       session?.settings?.zoneShrinkMode ??
+      session?.playZone?.shrinkMode ??
       'NONE';
     const rawCenter = lobbyState?.playZone?.center || session?.playZone?.center;
     const initialCenter = rawCenter
@@ -260,7 +280,9 @@ export default function HunterGameScreen() {
     });
   }, [
     lobbyState?.settings?.zoneShrinkMode,
+    lobbyState?.playZone?.shrinkMode,
     session?.settings?.zoneShrinkMode,
+    session?.playZone?.shrinkMode,
     lobbyState?.playZone,
     session?.playZone,
     activePlayZone,
@@ -369,12 +391,11 @@ export default function HunterGameScreen() {
     const liveLoc = liveRunnerLocations.get(r.id);
     let dist: number | undefined;
     if (currentLocation && liveLoc) {
-      dist = Math.round(
-        haversineDistance(currentLocation, {
-          latitude: liveLoc.latitude,
-          longitude: liveLoc.longitude,
-        })
-      );
+      const rawDist = haversineDistance(currentLocation, {
+        latitude: liveLoc.latitude,
+        longitude: liveLoc.longitude,
+      });
+      dist = defaultGPSFilter.smoothDistance(r.id, rawDist);
     }
 
     return {
@@ -416,13 +437,18 @@ export default function HunterGameScreen() {
                 ? activePlayZone.coordinates
                 : undefined)
             }
-            players={Array.from(liveRunnerLocations.values()).map((r) => ({
-              id: r.playerId,
-              name: r.displayName,
-              role: 'RUNNER' as const,
-              latitude: r.latitude,
-              longitude: r.longitude,
-            }))}
+            players={Array.from(liveRunnerLocations.values()).map((r) => {
+              const rawDist = currentLocation ? haversineDistance(currentLocation, r) : 0;
+              const stableDist = defaultGPSFilter.smoothDistance(r.playerId, rawDist);
+              return {
+                id: r.playerId,
+                name: r.displayName,
+                role: 'RUNNER' as const,
+                latitude: r.latitude,
+                longitude: r.longitude,
+                distanceMeters: stableDist,
+              };
+            })}
           />
         </View>
 
@@ -450,6 +476,16 @@ export default function HunterGameScreen() {
           >
             <CloseIcon size={18} color="#DC2626" />
           </TouchableOpacity>
+        </View>
+
+        {/* Floating Runner Location Ping Countdown Badge */}
+        <View style={styles.pingHudCapsule} pointerEvents="none">
+          <Text style={styles.pingHudIcon}>📡</Text>
+          <Text style={styles.pingHudText}>
+            {secondsUntilNextPing === 0
+              ? 'RUNNER GPS SCANNING NOW...'
+              : `RUNNER LOCATION PING IN ${secondsUntilNextPing}s`}
+          </Text>
         </View>
 
         {/* Floating Map Controls on Bottom Right */}
@@ -631,6 +667,35 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#1C1C1E',
     letterSpacing: -0.3,
+  },
+  pingHudCapsule: {
+    position: 'absolute',
+    top: 60,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 229, 255, 0.4)',
+    gap: 6,
+    zIndex: 22,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  pingHudIcon: {
+    fontSize: 12,
+  },
+  pingHudText: {
+    color: '#38BDF8',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   floatingMapControls: {
     position: 'absolute',

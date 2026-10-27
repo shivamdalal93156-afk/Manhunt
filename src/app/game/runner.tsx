@@ -24,6 +24,7 @@ import { AbilityType, ActiveEffect, HunterSnapshot, RunnerSnapshot } from '@/typ
 import { evaluateDynamicZone } from '@/lib/geo/battleRoyaleZone';
 import { TacticalRadioModal } from '@/components/game/TacticalRadioModal';
 import { ChatMessageBroadcast } from '@/services/game/gameService';
+import { defaultGPSFilter } from '@/lib/geo/gpsFilter';
 import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
 
 export default function RunnerGameScreen() {
@@ -171,19 +172,6 @@ export default function RunnerGameScreen() {
     };
   }, [startTracking, stopTracking]);
 
-  // Broadcast location when GPS updates
-  useEffect(() => {
-    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
-
-    gameService.broadcastLocation(
-      session.gameId,
-      session.myPlayerId,
-      'RUNNER',
-      me?.displayName || 'Runner',
-      currentLocation
-    );
-  }, [currentLocation, session?.gameId, session?.myPlayerId, me?.displayName]);
-
   // Match countdown timer
   useEffect(() => {
     const timer = setInterval(() => {
@@ -199,6 +187,53 @@ export default function RunnerGameScreen() {
 
     return () => clearInterval(timer);
   }, [router]);
+
+  // Match duration and synchronized elapsed time
+  const totalMatchDurationMin =
+    lobbyState?.settings?.durationMinutes ?? session?.settings?.durationMinutes ?? 30;
+  const matchElapsedSec = Math.max(
+    0,
+    totalMatchDurationMin * 60 - timeRemaining
+  );
+
+  // Synchronized Location Reveal Countdown
+  const pingIntervalSec =
+    lobbyState?.settings?.locationPingIntervalSeconds ??
+    session?.settings?.locationPingIntervalSeconds ??
+    30;
+  const secondsUntilNextPing =
+    pingIntervalSec > 0
+      ? pingIntervalSec - (matchElapsedSec % pingIntervalSec)
+      : 0;
+
+  // Broadcast location when GPS updates or when periodic ping reveal fires
+  useEffect(() => {
+    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
+
+    // High precision GPS filter: eliminates stationary flutter
+    const filteredLoc = defaultGPSFilter.filterLocation(currentLocation);
+
+    // Check if this is the scheduled ping interval reveal
+    const isPingReveal = secondsUntilNextPing === 0 || secondsUntilNextPing === pingIntervalSec;
+
+    // Gated broadcast: only send when motion >= 3m, or heartbeat (5s), or ping timer fires
+    if (defaultGPSFilter.shouldBroadcast(filteredLoc, isPingReveal)) {
+      gameService.broadcastLocation(
+        session.gameId,
+        session.myPlayerId,
+        'RUNNER',
+        me?.displayName || 'Runner',
+        filteredLoc
+      );
+    }
+  }, [
+    currentLocation,
+    session?.gameId,
+    session?.myPlayerId,
+    me?.displayName,
+    secondsUntilNextPing,
+    pingIntervalSec,
+  ]);
 
   const rawHunterSnapshots = Array.from(liveHunterLocations.values());
   // Pure authentic data: no hardcoded mock hunters!
@@ -234,18 +269,12 @@ export default function RunnerGameScreen() {
         threatLevel: 'CLEAR' as const,
       };
 
-  // Dynamic Play Zone Evaluation (PUBG / Free Fire & Concentric Shrink)
-  const totalMatchDurationMin =
-    lobbyState?.settings?.durationMinutes ?? session?.settings?.durationMinutes ?? 30;
-  const matchElapsedSec = Math.max(
-    0,
-    totalMatchDurationMin * 60 - timeRemaining
-  );
-
   const dynamicZone = React.useMemo(() => {
     const shrinkMode =
       lobbyState?.settings?.zoneShrinkMode ??
+      lobbyState?.playZone?.shrinkMode ??
       session?.settings?.zoneShrinkMode ??
+      session?.playZone?.shrinkMode ??
       'NONE';
     const rawCenter = lobbyState?.playZone?.center || session?.playZone?.center;
     const initialCenter = rawCenter
@@ -276,7 +305,9 @@ export default function RunnerGameScreen() {
     });
   }, [
     lobbyState?.settings?.zoneShrinkMode,
+    lobbyState?.playZone?.shrinkMode,
     session?.settings?.zoneShrinkMode,
+    session?.playZone?.shrinkMode,
     lobbyState?.playZone,
     session?.playZone,
     currentLocation,
@@ -442,6 +473,44 @@ export default function RunnerGameScreen() {
             Only reveal this 4-digit code if a Hunter physically catches and tags you!
           </Text>
         </Card>
+
+        {/* Live Location Reveal Timer Banner */}
+        <View
+          style={[
+            styles.revealTimerBar,
+            !isNightStealth && styles.revealTimerBarLight,
+            secondsUntilNextPing <= 5 && styles.revealTimerBarUrgent,
+          ]}
+        >
+          <View style={styles.revealTimerLeft}>
+            <Text style={styles.revealTimerIcon}>📡</Text>
+            <View>
+              <Text style={[styles.revealTimerTitle, !isNightStealth && styles.revealTimerTitleLight]}>
+                {secondsUntilNextPing <= 5 ? '⚠️ RADAR SCAN INCOMING!' : 'LOCATION PING COUNTDOWN'}
+              </Text>
+              <Text style={[styles.revealTimerSub, !isNightStealth && styles.revealTimerSubLight]}>
+                {secondsUntilNextPing <= 5
+                  ? `Your GPS will be revealed to hunters in ${secondsUntilNextPing}s`
+                  : `Next live position reveal in ${secondsUntilNextPing}s`}
+              </Text>
+            </View>
+          </View>
+          <View
+            style={[
+              styles.revealTimerBadge,
+              secondsUntilNextPing <= 5 && styles.revealTimerBadgeUrgent,
+            ]}
+          >
+            <Text
+              style={[
+                styles.revealTimerBadgeText,
+                secondsUntilNextPing <= 5 && styles.revealTimerBadgeTextUrgent,
+              ]}
+            >
+              {secondsUntilNextPing}s
+            </Text>
+          </View>
+        </View>
 
         {/* Dynamic Zone Phase Telemetry Bar */}
         {dynamicZone.mode !== 'NONE' && (
@@ -969,5 +1038,75 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '900',
+  },
+  revealTimerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#0F172A',
+    borderColor: 'rgba(56, 189, 248, 0.4)',
+    borderWidth: 1.5,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: spacing.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  revealTimerBarLight: {
+    backgroundColor: '#F0F9FF',
+    borderColor: '#BAE6FD',
+  },
+  revealTimerBarUrgent: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderColor: '#EF4444',
+  },
+  revealTimerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  revealTimerIcon: {
+    fontSize: 20,
+  },
+  revealTimerTitle: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#38BDF8',
+    letterSpacing: 0.6,
+  },
+  revealTimerTitleLight: {
+    color: '#0284C7',
+  },
+  revealTimerSub: {
+    fontSize: 10,
+    color: '#94A3B8',
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  revealTimerSubLight: {
+    color: '#64748B',
+  },
+  revealTimerBadge: {
+    backgroundColor: '#0284C7',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: borderRadius.full,
+  },
+  revealTimerBadgeUrgent: {
+    backgroundColor: '#EF4444',
+  },
+  revealTimerBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  revealTimerBadgeTextUrgent: {
+    color: '#FFFFFF',
   },
 });
