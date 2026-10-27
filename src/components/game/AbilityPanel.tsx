@@ -8,12 +8,14 @@ interface AbilityPanelProps {
   role: PlayerRole;
   activeEffects: ActiveEffect[];
   onActivate: (ability: AbilityType) => void;
+  isNightStealth?: boolean;
 }
 
 export const AbilityPanel: React.FC<AbilityPanelProps> = ({
   role,
   activeEffects,
   onActivate,
+  isNightStealth = false,
 }) => {
   const [, setTick] = useState(0);
 
@@ -60,16 +62,17 @@ export const AbilityPanel: React.FC<AbilityPanelProps> = ({
         disabled={isOnCooldown || isActive}
         style={[
           styles.abilityBtn,
-          isActive && { borderColor: accentColor, backgroundColor: 'rgba(232, 93, 59, 0.2)' },
+          isNightStealth ? styles.abilityBtnNight : styles.abilityBtnLight,
+          isActive && { borderColor: accentColor, backgroundColor: isNightStealth ? 'rgba(232, 93, 59, 0.2)' : 'rgba(232, 93, 59, 0.1)' },
           isOnCooldown && styles.abilityBtnCooldown,
         ]}
         onPress={() => onActivate(ability)}
       >
         <Text style={styles.abilityIcon}>{icon}</Text>
-        <Text style={[styles.abilityTitle, { color: isActive ? accentColor : colors.text.primary }]}>
+        <Text style={[styles.abilityTitle, { color: isActive ? accentColor : isNightStealth ? '#E2E8F0' : '#0F172A' }]}>
           {title.toUpperCase()}
         </Text>
-        <Text style={[styles.abilityStatus, isActive && { color: accentColor }]}>
+        <Text style={[styles.abilityStatus, isActive && { color: accentColor }, isNightStealth ? styles.abilityStatusNight : styles.abilityStatusLight]}>
           {isActive
             ? `ACTIVE ${activeSec}s`
             : isOnCooldown
@@ -81,8 +84,8 @@ export const AbilityPanel: React.FC<AbilityPanelProps> = ({
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.panelHeader}>TACTICAL ABILITIES</Text>
+    <View style={[styles.container, isNightStealth ? styles.containerNight : styles.containerLight]}>
+      <Text style={[styles.panelHeader, isNightStealth ? styles.panelHeaderNight : styles.panelHeaderLight]}>TACTICAL ABILITIES</Text>
       <View style={styles.row}>
         {role === 'RUNNER' && (
           <>
@@ -119,6 +122,19 @@ const styles = StyleSheet.create({
     borderColor: colors.border.glass,
     borderWidth: 1,
   },
+  containerLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  containerNight: {
+    backgroundColor: '#050811',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
   panelHeader: {
     color: colors.text.muted,
     fontSize: 10,
@@ -126,6 +142,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginBottom: spacing.xs + 2,
     textAlign: 'center',
+  },
+  panelHeaderLight: {
+    color: '#64748B',
+  },
+  panelHeaderNight: {
+    color: '#475569',
   },
   row: {
     flexDirection: 'row',
@@ -141,6 +163,14 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  abilityBtnLight: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+  },
+  abilityBtnNight: {
+    backgroundColor: '#090D18',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   abilityBtnCooldown: {
     opacity: 0.4,
@@ -161,6 +191,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 2,
     letterSpacing: 0.5,
+  },
+  abilityStatusLight: {
+    color: '#64748B',
+  },
+  abilityStatusNight: {
+    color: '#475569',
   },
   refereeNotice: {
     color: colors.referee.primary,

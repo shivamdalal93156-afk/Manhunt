@@ -19,6 +19,16 @@ export interface AbilityBroadcast {
   effect: ActiveEffect;
 }
 
+export interface ChatMessageBroadcast {
+  id: string;
+  senderId: string;
+  senderName: string;
+  role: PlayerRole;
+  channelScope?: 'TEAM' | 'ALL';
+  text: string;
+  timestamp: number;
+}
+
 class GameService {
   private channel: RealtimeChannel | null = null;
   private lastDbWriteTime = 0;
@@ -31,7 +41,8 @@ class GameService {
     onLocationReceived: (data: PlayerLocationBroadcast) => void,
     onAbilityActivated: (effect: ActiveEffect) => void,
     onCatchEvent: (payload: any) => void,
-    onConnectionError?: (err: Error) => void
+    onConnectionError?: (err: Error) => void,
+    onChatMessage?: (msg: ChatMessageBroadcast) => void
   ): () => void {
     if (this.channel) {
       this.channel.unsubscribe();
@@ -58,6 +69,11 @@ class GameService {
       .on('broadcast', { event: 'catch' }, ({ payload }) => {
         if (payload) {
           onCatchEvent(payload);
+        }
+      })
+      .on('broadcast', { event: 'chat' }, ({ payload }) => {
+        if (payload && onChatMessage) {
+          onChatMessage(payload as ChatMessageBroadcast);
         }
       })
       .subscribe((status) => {
@@ -193,6 +209,27 @@ class GameService {
         type: 'broadcast',
         event: 'catch',
         payload: eventData,
+      });
+    }
+  }
+
+  /**
+   * Broadcasts a tactical radio / chat message to teammates.
+   */
+  async broadcastChatMessage(msg: {
+    id: string;
+    senderId: string;
+    senderName: string;
+    role: PlayerRole;
+    channelScope?: 'TEAM' | 'ALL';
+    text: string;
+    timestamp: number;
+  }): Promise<void> {
+    if (this.channel) {
+      await this.channel.send({
+        type: 'broadcast',
+        event: 'chat',
+        payload: msg,
       });
     }
   }

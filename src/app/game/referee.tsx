@@ -4,15 +4,16 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Badge, Button, Card } from '@/components/ui';
-import { TacticalRadarMap } from '@/components/game/TacticalRadarMap';
+import { Ionicons } from '@expo/vector-icons';
+import { Badge, Button, Card, Screen, TopBar } from '@/components/ui';
+import { LivePlayZoneMap } from '@/components/game/LivePlayZoneMap';
 import { useLocation } from '@/hooks/useLocation';
 import { useLobbyStore } from '@/store/lobbyStore';
-import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
+import { borderRadius, colors, shadows, spacing, typography } from '@/theme/tokens';
 
 export default function RefereeDashboardScreen() {
   const router = useRouter();
@@ -21,7 +22,7 @@ export default function RefereeDashboardScreen() {
   const [isPaused, setIsPaused] = useState(false);
 
   const players = lobbyState?.players ?? [];
-  const hunters = players.filter((p) => p.role === 'HUNTER');
+  const chasers = players.filter((p) => p.role === 'HUNTER');
   const runners = players.filter((p) => p.role === 'RUNNER');
 
   const handleTogglePause = () => {
@@ -30,8 +31,8 @@ export default function RefereeDashboardScreen() {
       Alert.alert(
         next ? 'MATCH PAUSED' : 'MATCH RESUMED',
         next
-          ? 'Play is suspended. Countdown clocks and catches are frozen.'
-          : 'Play has resumed.'
+          ? 'Match is paused. Countdown timers and catches are frozen.'
+          : 'Match play has resumed.'
       );
       return next;
     });
@@ -53,130 +54,203 @@ export default function RefereeDashboardScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Top Header */}
-        <View style={styles.topHud}>
-          <View>
-            <Text style={styles.hudEyebrow}>SUPERVISOR OVERWATCH (FAMILY MODE)</Text>
-            <Text style={styles.hudTitle}>MATCH REFEREE</Text>
-          </View>
+    <Screen scroll>
+      <TopBar
+        title="REFEREE OVERWATCH"
+        subtitle={isPaused ? 'MATCH SUSPENDED' : 'LIVE SURVEILLANCE'}
+        onBack={() => router.back()}
+        rightSlot={
           <Badge
             label={isPaused ? 'PAUSED' : 'LIVE'}
             variant={isPaused ? 'warning' : 'safe'}
           />
+        }
+      />
+
+      <View style={styles.container}>
+        {/* Full Radar Overwatch Map */}
+        <View style={styles.mapCard}>
+          <LivePlayZoneMap
+            currentLocation={currentLocation}
+            zoneRadius={lobbyState?.playZone?.radiusMeters ?? 500}
+            fullScreen={false}
+            height={280}
+            players={players.map((p, idx) => ({
+              id: p.id,
+              name: p.displayName,
+              role: (p.role === 'SPECTATOR' ? 'RUNNER' : p.role) as 'HUNTER' | 'RUNNER' | 'REFEREE',
+              latitude: (currentLocation?.latitude ?? 28.6139) + 0.0003 * (idx % 3),
+              longitude: (currentLocation?.longitude ?? 77.2090) + 0.0003 * Math.floor(idx / 3),
+            }))}
+          />
         </View>
 
-        {/* Unredacted Map View */}
-        <TacticalRadarMap
-          hunterLocation={currentLocation}
-          runners={runners.map((r, i) => ({
-            playerId: r.id,
-            displayName: r.displayName,
-            latitude: (currentLocation?.latitude ?? 37.7749) + 0.0002 * (i + 1),
-            longitude: (currentLocation?.longitude ?? -122.4194) + 0.0002 * (i + 1),
-            measuredAt: Date.now(),
-          }))}
-          zoneRadiusMeters={lobbyState?.playZone.radiusMeters ?? 500}
-        />
-
-        {/* Privileged Overwatch Controls */}
-        <Text style={styles.sectionTitle}>SUPERVISOR CONTROLS</Text>
-        <View style={styles.controlRow}>
-          <Button
-            title={isPaused ? 'RESUME MATCH' : 'PAUSE MATCH'}
-            variant={isPaused ? 'primary' : 'secondary'}
-            size="md"
+        {/* Referee Command Controls */}
+        <View style={styles.controlsRow}>
+          <TouchableOpacity
+            activeOpacity={0.8}
             onPress={handleTogglePause}
-            style={styles.controlBtn}
-          />
-          <Button
-            title="END MATCH"
-            variant="danger"
-            size="md"
+            style={[
+              styles.controlBtn,
+              isPaused ? styles.controlBtnResume : styles.controlBtnPause,
+            ]}
+          >
+            <Ionicons
+              name={isPaused ? 'play' : 'pause'}
+              size={20}
+              color="#FFFFFF"
+            />
+            <Text style={styles.controlBtnText}>
+              {isPaused ? 'RESUME PLAY' : 'PAUSE MATCH'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.8}
             onPress={handleEndGame}
-            style={styles.controlBtn}
-          />
+            style={[styles.controlBtn, styles.controlBtnEnd]}
+          >
+            <Ionicons name="stop" size={20} color="#FFFFFF" />
+            <Text style={styles.controlBtnText}>END MATCH</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Live Roster Status */}
-        <Text style={styles.sectionTitle}>ACTIVE PLAYER ROSTER</Text>
-        <Card variant="elevated">
-          {players.map((p) => (
-            <View key={p.id} style={styles.playerItem}>
-              <View>
-                <Text style={styles.playerName}>{p.displayName}</Text>
-                <Text style={styles.playerRoleSub}>{p.role}</Text>
-              </View>
-              <Badge
-                label={p.status}
-                variant={p.status === 'ALIVE' ? 'safe' : 'danger'}
-              />
+        {/* Squad Status Telemetry */}
+        <Text style={styles.sectionTitle}>SQUAD ROSTER OVERWATCH</Text>
+        <Card variant="portal" style={styles.card}>
+          <View style={styles.statLine}>
+            <View style={styles.roleHeader}>
+              <View style={[styles.dot, { backgroundColor: colors.hunter.primary }]} />
+              <Text style={styles.roleName}>CHASERS ({chasers.length})</Text>
+            </View>
+            <Text style={styles.roleDetail}>All Units Active</Text>
+          </View>
+          {chasers.map((c) => (
+            <View key={c.id} style={styles.playerSubRow}>
+              <Text style={styles.playerSubName}>{c.displayName}</Text>
+              <Text style={styles.playerSubStatus}>{c.isReady ? 'Ready' : 'Standby'}</Text>
+            </View>
+          ))}
+
+          <View style={[styles.statLine, { marginTop: spacing.md }]}>
+            <View style={styles.roleHeader}>
+              <View style={[styles.dot, { backgroundColor: colors.runner.primary }]} />
+              <Text style={styles.roleName}>RUNNERS ({runners.length})</Text>
+            </View>
+            <Text style={styles.roleDetail}>
+              {runners.filter((r) => r.heartsRemaining > 0).length} Surviving
+            </Text>
+          </View>
+          {runners.map((r) => (
+            <View key={r.id} style={styles.playerSubRow}>
+              <Text style={styles.playerSubName}>{r.displayName}</Text>
+              <Text style={styles.playerSubStatus}>
+                {r.heartsRemaining} {r.heartsRemaining === 1 ? 'Heart' : 'Hearts'}
+              </Text>
             </View>
           ))}
         </Card>
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background.base,
-  },
   container: {
     padding: spacing.md,
   },
-  topHud: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
+  mapCard: {
+    borderRadius: borderRadius.xl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    marginBottom: spacing.md,
+    ...shadows.sm,
   },
-  hudEyebrow: {
-    color: colors.referee.primary,
-    fontSize: typography.fontSize.xs,
-    letterSpacing: 1.5,
-    fontWeight: '700',
-  },
-  hudTitle: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.xl,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-  },
-  sectionTitle: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    letterSpacing: typography.letterSpacing.wide,
-    fontWeight: '700',
-    marginTop: spacing.md,
-    marginBottom: spacing.xs,
-  },
-  controlRow: {
+  controlsRow: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.lg,
   },
   controlBtn: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 48,
+    borderRadius: borderRadius.lg,
+    gap: 8,
   },
-  playerItem: {
+  controlBtnPause: {
+    backgroundColor: '#F59E0B',
+  },
+  controlBtnResume: {
+    backgroundColor: colors.status.safe,
+  },
+  controlBtnEnd: {
+    backgroundColor: colors.status.danger,
+  },
+  controlBtnText: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.8,
+  },
+  sectionTitle: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    letterSpacing: typography.letterSpacing.tactical,
+    color: colors.text.muted,
+    marginBottom: spacing.xs,
+    marginLeft: 4,
+  },
+  card: {
+    padding: spacing.md,
+    borderRadius: borderRadius.xl,
+    marginBottom: spacing.xl,
+  },
+  statLine: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.xs + 2,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
+    paddingBottom: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border.default,
   },
-  playerName: {
+  roleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  roleName: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '800',
     color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: '700',
+    letterSpacing: 0.8,
   },
-  playerRoleSub: {
+  roleDetail: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '600',
     color: colors.text.muted,
-    fontSize: 10,
+  },
+  playerSubRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+  },
+  playerSubName: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '600',
+    color: colors.text.secondary,
+  },
+  playerSubStatus: {
+    fontSize: typography.fontSize.xs,
+    color: colors.text.muted,
   },
 });

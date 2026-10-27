@@ -28,6 +28,7 @@ export interface HunterSnapshot {
   displayName: string;
   latitude: number;
   longitude: number;
+  accuracy?: number;
   measuredAt: number;
 }
 

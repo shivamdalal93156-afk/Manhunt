@@ -1,38 +1,78 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert,
   AppState,
-  Modal,
-  ScrollView,
+  Dimensions,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Badge, Button, Card } from '@/components/ui';
-import { AbilityPanel } from '@/components/game/AbilityPanel';
-import { LivePlayZoneMap, MapPlayerMarker } from '@/components/game/LivePlayZoneMap';
-import { TacticalRadarMap } from '@/components/game/TacticalRadarMap';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  CustomAlertModal,
+  AlertButton,
+  HelpIcon,
+  CloseIcon,
+  CompassIcon,
+  LocateIcon,
+  ListIcon,
+} from '@/components/ui';
+import { colors } from '@/theme/tokens';
+import { LivePlayZoneMap, MapViewMode } from '@/components/game/LivePlayZoneMap';
+import { GameBottomDrawer, DrawerPlayerItem } from '@/components/game/GameBottomDrawer';
 import { useLocation } from '@/hooks/useLocation';
 import { haversineDistance } from '@/lib/geo/distance';
-import { GameEngine } from '@/services/game/gameEngine';
-import { gameService } from '@/services/game/gameService';
-import { lobbyService } from '@/services/lobby/lobbyService';
-import { sessionManager } from '@/services/session/sessionManager';
-import { useLobbyStore } from '@/store/lobbyStore';
 import { AbilityType, ActiveEffect, RunnerSnapshot } from '@/types/game';
 import { evaluateDynamicZone } from '@/lib/geo/battleRoyaleZone';
-import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
+import { gameService, ChatMessageBroadcast } from '@/services/game/gameService';
+import { lobbyService } from '@/services/lobby/lobbyService';
+import { sessionManager } from '@/services/session/sessionManager';
+import { supabase } from '@/services/supabase';
+import { useLobbyStore } from '@/store/lobbyStore';
+import { PlayZoneSettings } from '@/types/lobby';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+const AVATAR_COLORS = ['#22C55E', '#06B6D4', '#DE3B7E', '#8B5CF6', '#F59E0B'];
 
 export default function HunterGameScreen() {
   const router = useRouter();
   const { session, lobbyState } = useLobbyStore();
   const { currentLocation, startTracking, stopTracking, refreshLocation } = useLocation();
 
-  // Restore session from device storage if app was closed or reopened
+  // Map imagery mode: street vs satellite
+  const [mapViewMode, setMapViewMode] = useState<MapViewMode>('satellite');
+
+  // Bottom drawer collapse state (swiping down or tapping lowers drawer to maximize Google Map)
+  const [isDrawerCollapsed, setIsDrawerCollapsed] = useState(false);
+
+  // In-app alert modal state
+  const [alertConfig, setAlertConfig] = useState<{
+    visible: boolean;
+    title: string;
+    message?: string;
+    buttons?: AlertButton[];
+  }>({
+    visible: false,
+    title: '',
+  });
+
+  const showAlert = (
+    title: string,
+    message?: string,
+    buttons?: AlertButton[]
+  ) => {
+    setAlertConfig({
+      visible: true,
+      title,
+      message,
+      buttons: buttons || [{ text: 'CONFIRM' }],
+    });
+  };
+
+  // Restore session if needed
   useEffect(() => {
     if (!session?.gameId) {
       sessionManager.getActiveSession().then((persisted) => {
@@ -43,7 +83,44 @@ export default function HunterGameScreen() {
     }
   }, [session?.gameId]);
 
-  // AppState listener ensures GPS and channels remain live when returning from another app
+  // Load authoritative active playZone (polygon or circle)
+  const [activePlayZone, setActivePlayZone] = useState<PlayZoneSettings | null>(
+    lobbyState?.playZone || session?.playZone || null
+  );
+
+  useEffect(() => {
+    const loadPlayZone = async () => {
+      const gid = session?.gameId || lobbyState?.gameId;
+      if (gid) {
+        try {
+          const { data } = await supabase
+            .from('games')
+            .select('play_zone')
+            .eq('id', gid)
+            .maybeSingle();
+          if (data?.play_zone) {
+            setActivePlayZone(data.play_zone);
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      try {
+        const stored = await AsyncStorage.getItem('@manhunt/configured_playzone');
+        if (stored) {
+          setActivePlayZone(JSON.parse(stored));
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    loadPlayZone();
+  }, [session?.gameId, lobbyState?.gameId]);
+
+  // AppState listener for GPS tracking
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
@@ -55,9 +132,6 @@ export default function HunterGameScreen() {
   }, [refreshLocation, startTracking]);
 
   const [activeEffects, setActiveEffects] = useState<ActiveEffect[]>([]);
-  const [tacticalMapMode, setTacticalMapMode] = useState<'satellite' | 'radar'>('satellite');
-  const [selectedRunner, setSelectedRunner] = useState<RunnerSnapshot | null>(null);
-  const [catchFeedback, setCatchFeedback] = useState<string | null>(null);
   const [liveRunnerLocations, setLiveRunnerLocations] = useState<Map<string, RunnerSnapshot>>(
     new Map()
   );
@@ -65,10 +139,8 @@ export default function HunterGameScreen() {
     (lobbyState?.settings.durationMinutes ?? 30) * 60
   );
 
-  // Catch Code Verification Modal State
-  const [showCatchModal, setShowCatchModal] = useState(false);
-  const [enteredCatchCode, setEnteredCatchCode] = useState('');
-  const [isSubmittingCatch, setIsSubmittingCatch] = useState(false);
+  // Squad Radio
+  const [chatMessages, setChatMessages] = useState<ChatMessageBroadcast[]>([]);
 
   const me = lobbyState?.players.find((p) => p.id === session?.myPlayerId);
 
@@ -87,30 +159,31 @@ export default function HunterGameScreen() {
               displayName: broadcast.displayName,
               latitude: broadcast.latitude,
               longitude: broadcast.longitude,
-              accuracy: broadcast.accuracy,
+              accuracy: broadcast.accuracy ?? 5,
               measuredAt: broadcast.measuredAt,
             });
             return next;
           });
         }
       },
-      (newEffect) => {
-        setActiveEffects((prev) => [...prev, newEffect]);
+      (effect) => {
+        setActiveEffects((prev) => [...prev, effect]);
       },
-      (catchPayload) => {
-        setCatchFeedback(
-          catchPayload.eliminated
-            ? `RUNNER ELIMINATED! A runner lost their final heart!`
-            : `TAG CONFIRMED! Target runner lost 1 heart.`
-        );
-        if (catchPayload.all_runners_eliminated) {
-          Alert.alert('VICTORY!', 'All runners eliminated! Hunters win!', [
+      (catchEvt) => {
+        if (catchEvt?.all_runners_eliminated) {
+          showAlert('VICTORY!', 'All runners captured! Hunters win!', [
             { text: 'View Results', onPress: () => router.replace('/game/results') },
           ]);
         }
       },
-      (connErr) => {
-        setCatchFeedback(`⚠️ ${connErr.message}`);
+      undefined,
+      (chatMsg) => {
+        if (chatMsg.channelScope === 'ALL' || !chatMsg.channelScope || chatMsg.role === 'HUNTER') {
+          setChatMessages((prev) => {
+            if (prev.some((p) => p.id === chatMsg.id)) return prev;
+            return [...prev, chatMsg];
+          });
+        }
       }
     );
 
@@ -119,40 +192,12 @@ export default function HunterGameScreen() {
     };
   }, [session?.gameId, router]);
 
-  // Start continuous location tracking and broadcast to live channel
+  // Game clock countdown
   useEffect(() => {
-    let cleanupTracking: (() => void) | undefined;
-    startTracking({ timeIntervalMs: 1000, distanceIntervalMeters: 2 }).then(
-      (unsub) => {
-        cleanupTracking = unsub;
-      }
-    );
-
-    return () => {
-      cleanupTracking?.();
-      stopTracking();
-    };
-  }, [startTracking, stopTracking]);
-
-  // Broadcast location when GPS updates
-  useEffect(() => {
-    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
-
-    gameService.broadcastLocation(
-      session.gameId,
-      session.myPlayerId,
-      'HUNTER',
-      me?.displayName || 'Hunter',
-      currentLocation
-    );
-  }, [currentLocation, session?.gameId, session?.myPlayerId, me?.displayName]);
-
-  // Match countdown timer
-  useEffect(() => {
-    const timer = setInterval(() => {
+    const interval = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
-          clearInterval(timer);
+          clearInterval(interval);
           router.replace('/game/results');
           return 0;
         }
@@ -160,49 +205,48 @@ export default function HunterGameScreen() {
       });
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => clearInterval(interval);
   }, [router]);
 
-  // Active runners from lobby state
-  const allRunners = (lobbyState?.players ?? []).filter((p) => p.role === 'RUNNER');
-  const livingRunners = allRunners.filter(
-    (p) => p.status === 'ALIVE' && p.heartsRemaining > 0
-  );
+  // Continuous broadcast of Hunter's own GPS
+  useEffect(() => {
+    if (!currentLocation || !session?.gameId || !session?.myPlayerId) return;
 
-  // Filter real runner telemetry according to stealth and radar visibility
-  const rawRunnerSnapshots = Array.from(liveRunnerLocations.values());
-  const visibleRunners: RunnerSnapshot[] = rawRunnerSnapshots.filter((runner) => {
-    const now = Date.now();
-    const hasStealth = activeEffects.some(
-      (e) => e.actorPlayerId === runner.playerId && e.ability === 'STEALTH' && e.expiresAt > now
+    gameService.broadcastLocation(
+      session.gameId,
+      session.myPlayerId,
+      'HUNTER',
+      me?.displayName ?? 'Chaser',
+      currentLocation
     );
-    return !hasStealth;
-  });
+  }, [currentLocation, session?.gameId, session?.myPlayerId, me?.displayName]);
 
-  // Dynamic Zone (PUBG / Free Fire Battle Royale & Concentric Shrink)
+  // Evaluated Dynamic Safe Zone
   const totalMatchDurationMin =
     lobbyState?.settings?.durationMinutes ?? session?.settings?.durationMinutes ?? 30;
-  const matchElapsedSec = Math.max(
-    0,
-    totalMatchDurationMin * 60 - timeRemaining
-  );
+  const matchElapsedSec = Math.max(0, totalMatchDurationMin * 60 - timeRemaining);
 
   const dynamicZone = React.useMemo(() => {
     const shrinkMode =
       lobbyState?.settings?.zoneShrinkMode ??
       session?.settings?.zoneShrinkMode ??
       'NONE';
-    const initialCenter =
-      lobbyState?.playZone?.center || session?.playZone?.center
-        ? {
-            latitude: (lobbyState?.playZone?.center || session?.playZone?.center)![1],
-            longitude: (lobbyState?.playZone?.center || session?.playZone?.center)![0],
-          }
-        : currentLocation
-        ? { latitude: currentLocation.latitude, longitude: currentLocation.longitude }
-        : { latitude: 28.6139, longitude: 77.2090 };
+    const rawCenter = lobbyState?.playZone?.center || session?.playZone?.center;
+    const initialCenter = rawCenter
+      ? Array.isArray(rawCenter)
+        ? { latitude: rawCenter[1], longitude: rawCenter[0] }
+        : rawCenter
+      : currentLocation
+      ? { latitude: currentLocation.latitude, longitude: currentLocation.longitude }
+      : { latitude: 28.6139, longitude: 77.2090 };
     const initialRadius =
       lobbyState?.playZone?.radiusMeters ?? session?.playZone?.radiusMeters ?? 500;
+    const polygonCoordinates =
+      activePlayZone?.type === 'polygon' && activePlayZone.coordinates
+        ? activePlayZone.coordinates
+        : lobbyState?.playZone?.type === 'polygon' && lobbyState.playZone.coordinates
+        ? lobbyState.playZone.coordinates
+        : undefined;
 
     return evaluateDynamicZone({
       initialCenter,
@@ -212,33 +256,54 @@ export default function HunterGameScreen() {
       elapsedSeconds: matchElapsedSec,
       playerLocation: currentLocation,
       seed: session?.joinCode ?? 'manhunt_seed',
+      polygonCoordinates,
     });
   }, [
     lobbyState?.settings?.zoneShrinkMode,
     session?.settings?.zoneShrinkMode,
     lobbyState?.playZone,
     session?.playZone,
+    activePlayZone,
     currentLocation,
     totalMatchDurationMin,
     matchElapsedSec,
     session?.joinCode,
   ]);
 
-  const handleOpenCatchModal = () => {
-    setEnteredCatchCode('');
-    setShowCatchModal(true);
+  const handleActivateAbility = async (ability: AbilityType) => {
+    if (!me || !session?.gameId || !session?.myPlayerId) return;
+    try {
+      const effect = await gameService.activateAbility(
+        session.gameId,
+        session.myPlayerId,
+        ability
+      );
+      setActiveEffects((prev) => [...prev, effect]);
+    } catch (err: unknown) {
+      showAlert(
+        'ABILITY REJECTED',
+        err instanceof Error ? err.message : 'Server rejected ability activation'
+      );
+    }
   };
 
-  const handleSubmitCatchCode = async () => {
+  const handleSendChatMessage = async (text: string, scope?: 'TEAM' | 'ALL') => {
     if (!session?.gameId || !session?.myPlayerId) return;
+    const msg: ChatMessageBroadcast = {
+      id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      senderId: session.myPlayerId,
+      senderName: me?.displayName ?? 'Chaser',
+      role: 'HUNTER',
+      channelScope: scope ?? 'TEAM',
+      text,
+      timestamp: Date.now(),
+    };
+    setChatMessages((prev) => [...prev, msg]);
+    await gameService.broadcastChatMessage(msg);
+  };
 
-    const code = enteredCatchCode.trim();
-    if (code.length !== 4) {
-      Alert.alert('INVALID CODE', 'Please enter a valid 4-digit catch code.');
-      return;
-    }
-
-    setIsSubmittingCatch(true);
+  const handleSubmitCatchCode = async (code: string) => {
+    if (!session?.gameId || !session?.myPlayerId) return;
     try {
       const result = await lobbyService.submitCatchCode(
         session.gameId,
@@ -248,13 +313,7 @@ export default function HunterGameScreen() {
         currentLocation?.longitude ?? 0
       );
 
-      setIsSubmittingCatch(false);
-
       if (result.success) {
-        setShowCatchModal(false);
-        setCatchFeedback(result.message);
-
-        // Broadcast catch event across Realtime channel
         await gameService.broadcastCatchEvent({
           hunter_id: session.myPlayerId,
           runner_id: result.runnerId,
@@ -264,490 +323,404 @@ export default function HunterGameScreen() {
         });
 
         if (result.allRunnersEliminated) {
-          Alert.alert('VICTORY!', 'All runners eliminated! Hunters win!', [
+          showAlert('VICTORY!', 'All runners captured! Hunters win!', [
             { text: 'View Results', onPress: () => router.replace('/game/results') },
           ]);
         } else {
-          Alert.alert(
+          showAlert(
             result.isEliminated ? 'TARGET ELIMINATED!' : 'CATCH CONFIRMED!',
             result.message
           );
         }
       } else {
-        Alert.alert('VERIFICATION FAILED', result.message);
+        showAlert('VERIFICATION FAILED', result.message);
       }
     } catch (err: unknown) {
-      setIsSubmittingCatch(false);
-      Alert.alert(
+      showAlert(
         'SERVER ERROR',
         err instanceof Error ? err.message : 'Failed to reach game server.'
       );
     }
   };
 
-  const handleActivateAbility = async (ability: AbilityType) => {
-    if (!me || !session?.gameId || !session?.myPlayerId) return;
-
-    try {
-      const effect = await gameService.activateAbility(
-        session.gameId,
-        session.myPlayerId,
-        ability
-      );
-      setActiveEffects((prev) => [...prev, effect]);
-    } catch (err: unknown) {
-      Alert.alert(
-        'ABILITY REJECTED',
-        err instanceof Error ? err.message : 'Server rejected ability activation'
-      );
-    }
+  const handleLeave = () => {
+    showAlert('LEAVE MATCH', 'Are you sure you want to exit to main menu?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Leave',
+        style: 'destructive',
+        onPress: async () => {
+          await sessionManager.clearActiveSession();
+          router.replace('/');
+        },
+      },
+    ]);
   };
 
   const formatTimer = (secs: number) => {
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
+    const m = Math.floor(secs / 60);
     const s = secs % 60;
-    if (h > 0) {
-      return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-    }
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    return `${m}m ${s < 10 ? '0' : ''}${s}s`;
   };
 
+  // Convert runners to drawer items
+  const allRunners = lobbyState?.players.filter((p) => p.role === 'RUNNER') || [];
+  const drawerPlayers: DrawerPlayerItem[] = allRunners.map((r, idx) => {
+    const liveLoc = liveRunnerLocations.get(r.id);
+    let dist: number | undefined;
+    if (currentLocation && liveLoc) {
+      dist = Math.round(
+        haversineDistance(currentLocation, {
+          latitude: liveLoc.latitude,
+          longitude: liveLoc.longitude,
+        })
+      );
+    }
+
+    return {
+      id: r.id,
+      name: r.displayName,
+      initials: r.displayName.slice(0, 2).toUpperCase(),
+      avatarColor: AVATAR_COLORS[idx % AVATAR_COLORS.length],
+      distanceMeters: dist,
+      statusText: liveLoc ? 'Live Location' : 'Searching',
+    };
+  });
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Top HUD: Role & Clock */}
-        <View style={styles.topHud}>
-          <View style={styles.roleIdentity}>
-            <Badge label="CHASER" variant="hunter" />
-            <Text style={styles.hudTitle}>HUNTER</Text>
-          </View>
-          <View style={styles.clockPill}>
-            <Text style={styles.clockLabel}>TIME REMAINING</Text>
-            <Text style={styles.clockVal}>{formatTimer(timeRemaining)}</Text>
-          </View>
-        </View>
-
-        {/* Telemetry Stats Banner */}
-        <View style={styles.statsRow}>
-          <View style={styles.statBox}>
-            <Text style={styles.statLabel}>TARGETS</Text>
-            <Text style={styles.statVal}>
-              {livingRunners.length} / {allRunners.length}
-            </Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={styles.statLabel}>GPS REVEAL</Text>
-            <Text style={styles.statVal}>
-              {lobbyState?.settings.locationPingIntervalSeconds ?? 30}s
-            </Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={styles.statLabel}>ZONE</Text>
-            <Text style={styles.statVal}>
-              {lobbyState?.playZone.radiusMeters ?? 500}m
-            </Text>
-          </View>
-        </View>
-
-        {/* Map View Switcher: Satellite vs Radar */}
-        <View style={styles.mapSwitchRow}>
-          <TouchableOpacity
-            style={[
-              styles.mapSwitchBtn,
-              tacticalMapMode === 'satellite' && styles.mapSwitchBtnActive,
-            ]}
-            onPress={() => setTacticalMapMode('satellite')}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.mapSwitchText,
-                tacticalMapMode === 'satellite' && styles.mapSwitchTextActive,
-              ]}
-            >
-              🛰️ SATELLITE MAP
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.mapSwitchBtn,
-              tacticalMapMode === 'radar' && styles.mapSwitchBtnActive,
-            ]}
-            onPress={() => setTacticalMapMode('radar')}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.mapSwitchText,
-                tacticalMapMode === 'radar' && styles.mapSwitchTextActive,
-              ]}
-            >
-              🎯 RADAR VIEW
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {tacticalMapMode === 'satellite' ? (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <View style={styles.container}>
+        {/* Full-bleed Edge-to-Edge Map View (Google Maps Style) */}
+        <View style={styles.mapContainer}>
           <LivePlayZoneMap
             currentLocation={currentLocation}
             zoneRadius={dynamicZone.currentCircle.radiusMeters}
             customCenter={dynamicZone.currentCircle.center}
             dynamicNextSafeCircle={dynamicZone.nextSafeCircle}
-            dynamicPhaseText={dynamicZone.mode !== 'NONE' ? dynamicZone.statusText : null}
-            players={visibleRunners.map((r) => ({
+            dynamicNextSafePolygon={dynamicZone.nextSafePolygon}
+            dynamicPhaseText={dynamicZone.statusText}
+            fullScreen
+            hideModeToggle
+            viewMode={mapViewMode}
+            onViewModeChange={setMapViewMode}
+            zoneMode={
+              (activePlayZone as any)?.mode === 'NONE'
+                ? 'NONE'
+                : activePlayZone?.type === 'polygon'
+                ? 'POLYGON'
+                : 'CIRCLE'
+            }
+            polygonVertices={
+              dynamicZone.currentPolygon ??
+              (activePlayZone?.type === 'polygon'
+                ? activePlayZone.coordinates
+                : undefined)
+            }
+            players={Array.from(liveRunnerLocations.values()).map((r) => ({
               id: r.playerId,
               name: r.displayName,
               role: 'RUNNER' as const,
               latitude: r.latitude,
               longitude: r.longitude,
-              distanceMeters: currentLocation
-                ? haversineDistance(currentLocation, {
-                    latitude: r.latitude,
-                    longitude: r.longitude,
-                  })
-                : undefined,
             }))}
           />
-        ) : (
-          <TacticalRadarMap
-            hunterLocation={currentLocation}
-            runners={visibleRunners}
-            zoneRadiusMeters={dynamicZone.currentCircle.radiusMeters}
-            catchRadiusMeters={15}
-            selectedRunnerId={selectedRunner?.playerId}
-            onSelectRunner={setSelectedRunner}
-          />
-        )}
+        </View>
 
-        {/* Primary Hunting Game Catch-Code Verification Trigger */}
-        <Card variant="hunter" style={styles.catchActionCard}>
-          <Text style={styles.catchActionTitle}>PHYSICAL CATCH CONFIRMATION</Text>
-          <Text style={styles.catchActionSubtitle}>
-            When you physically catch/tag a runner, obtain their secret 4-digit code to confirm elimination.
-          </Text>
-          <Button
-            title="VERIFY RUNNER CATCH CODE"
-            variant="gradient"
-            size="lg"
-            fullWidth
-            onPress={handleOpenCatchModal}
-            style={styles.catchBtn}
-          />
-        </Card>
+        {/* Top Floating HUD matching reference screenshot */}
+        <View style={styles.topHud}>
+          {/* Left: Help (?) button */}
+          <TouchableOpacity
+            style={styles.hudCircleBtn}
+            onPress={() => router.push('/rules')}
+            activeOpacity={0.7}
+          >
+            <HelpIcon size={20} color={colors.text.primary} />
+          </TouchableOpacity>
 
-        {/* Catch Confirmation Banner */}
-        {catchFeedback && (
-          <Card variant="glass" style={styles.feedbackCard}>
-            <Text style={styles.feedbackText}>{catchFeedback}</Text>
-          </Card>
-        )}
+          {/* Center: White timer capsule */}
+          <View style={styles.timerCapsule}>
+            <Text style={styles.timerCapsuleText}>{formatTimer(timeRemaining)}</Text>
+          </View>
 
-        {/* Tactical Ability Dock */}
-        <AbilityPanel
-          role="HUNTER"
-          activeEffects={activeEffects}
-          onActivate={handleActivateAbility}
-        />
-      </ScrollView>
+          {/* Right: Exit / Leave button */}
+          <TouchableOpacity
+            style={styles.hudCircleBtn}
+            onPress={handleLeave}
+            activeOpacity={0.7}
+          >
+            <CloseIcon size={18} color="#DC2626" />
+          </TouchableOpacity>
+        </View>
 
-      {/* Catch Code Verification Modal */}
-      <Modal
-        visible={showCatchModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowCatchModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>ENTER RUNNER CATCH CODE</Text>
-            <Text style={styles.modalSubtitle}>
-              Ask the captured runner for their 4-digit secret code:
-            </Text>
+        {/* Floating Map Controls on Bottom Right */}
+        <View
+          style={[
+            styles.floatingMapControls,
+            isDrawerCollapsed
+              ? styles.floatingMapControlsCollapsed
+              : styles.floatingMapControlsExpanded,
+          ]}
+        >
+          {/* Quick 1-tap Lower/Expand Drawer Button for Instant Full Google Map View */}
+          <TouchableOpacity
+            style={styles.mapActionBtn}
+            onPress={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
+            activeOpacity={0.8}
+          >
+            <ListIcon size={20} color={colors.text.primary} />
+          </TouchableOpacity>
 
-            {/* Discrete 4-PIN Box Display */}
-            <View style={styles.pinWrapper}>
-              <View style={styles.pinBoxesRow}>
-                {[0, 1, 2, 3].map((index) => {
-                  const digit = enteredCatchCode[index] || '';
-                  const isCurrent = enteredCatchCode.length === index;
-                  return (
-                    <View
-                      key={index}
-                      style={[
-                        styles.pinBox,
-                        isCurrent && styles.pinBoxActive,
-                        digit ? styles.pinBoxFilled : null,
-                      ]}
-                    >
-                      <Text style={styles.pinDigit}>{digit || '•'}</Text>
-                    </View>
-                  );
-                })}
-              </View>
+          <TouchableOpacity
+            style={styles.mapActionBtn}
+            onPress={() => refreshLocation()}
+            activeOpacity={0.8}
+          >
+            <CompassIcon size={22} color={colors.text.primary} />
+          </TouchableOpacity>
 
-              {/* Direct Hidden Input */}
-              <TextInput
-                style={styles.hiddenInput}
-                keyboardType="number-pad"
-                maxLength={4}
-                value={enteredCatchCode}
-                onChangeText={setEnteredCatchCode}
-                autoFocus
-              />
-            </View>
+          <TouchableOpacity
+            style={styles.mapActionBtn}
+            onPress={() => refreshLocation()}
+            activeOpacity={0.8}
+          >
+            <LocateIcon size={22} color={colors.brand.accent} />
+          </TouchableOpacity>
+        </View>
 
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setShowCatchModal(false)}
+        {/* Street Map vs Satellite Mode Toggle floating directly above bottom drawer */}
+        <View
+          style={[
+            styles.floatingModeToggleWrapper,
+            isDrawerCollapsed
+              ? styles.floatingModeToggleCollapsed
+              : styles.floatingModeToggleExpanded,
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={styles.floatingModeToggleBar}>
+            <TouchableOpacity
+              style={[
+                styles.floatingModeBtn,
+                mapViewMode === 'street' && styles.floatingModeBtnActiveStreet,
+              ]}
+              onPress={() => setMapViewMode('street')}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.floatingModeText,
+                  mapViewMode === 'street' && styles.floatingModeTextActive,
+                ]}
               >
-                <Text style={styles.modalCancelText}>CANCEL</Text>
-              </TouchableOpacity>
-              <Button
-                title={isSubmittingCatch ? 'VERIFYING...' : 'CONFIRM CATCH'}
-                variant="gradient"
-                size="md"
-                onPress={handleSubmitCatchCode}
-                disabled={isSubmittingCatch || enteredCatchCode.trim().length !== 4}
-              />
-            </View>
+                🗺️ STREET MAP
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.floatingModeBtn,
+                mapViewMode === 'satellite' && styles.floatingModeBtnActiveSat,
+              ]}
+              onPress={() => setMapViewMode('satellite')}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.floatingModeText,
+                  mapViewMode === 'satellite' && styles.floatingModeTextActive,
+                ]}
+              >
+                🛰️ SATELLITE
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+
+        {/* Bottom Drawer matching screenshot_1_ui.webp */}
+        <View style={styles.bottomDrawerWrapper}>
+          <GameBottomDrawer
+            role="HUNTER"
+            players={drawerPlayers}
+            playersSectionTitle="Hunters & Targets"
+            activeEffects={activeEffects}
+            onActivateAbility={handleActivateAbility}
+            chatMessages={chatMessages}
+            onSendChatMessage={handleSendChatMessage}
+            onSubmitCatchCode={handleSubmitCatchCode}
+            isCollapsed={isDrawerCollapsed}
+            onCollapseChange={setIsDrawerCollapsed}
+          />
+        </View>
+
+        {/* In-App Rounded Alert Modal */}
+        <CustomAlertModal
+          visible={alertConfig.visible}
+          title={alertConfig.title}
+          message={alertConfig.message}
+          buttons={alertConfig.buttons}
+          onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
+        />
+      </View>
     </SafeAreaView>
   );
 }
 
-
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: colors.background.base,
+    backgroundColor: '#070A0F',
   },
   container: {
-    padding: spacing.md,
+    flex: 1,
+    position: 'relative',
+    backgroundColor: '#070A0F',
+  },
+  mapContainer: {
+    ...StyleSheet.absoluteFillObject,
   },
   topHud: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  roleIdentity: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs + 2,
-  },
-  hudTitle: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.lg,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-  },
-  clockPill: {
-    backgroundColor: colors.background.surfaceCard,
-    borderColor: colors.border.glass,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    alignItems: 'center',
-  },
-  clockLabel: {
-    color: colors.text.muted,
-    fontSize: 9,
-    letterSpacing: 1,
-    fontWeight: '700',
-  },
-  clockVal: {
-    color: colors.brand.gradientEnd,
-    fontSize: typography.fontSize.base,
-    fontWeight: '900',
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.xs,
-    gap: spacing.xs,
-  },
-  statBox: {
-    flex: 1,
-    backgroundColor: colors.background.surfaceCard,
-    borderColor: colors.border.glass,
-    borderWidth: 1,
-    borderRadius: borderRadius.md,
-    paddingVertical: spacing.xs + 4,
-    alignItems: 'center',
-  },
-  statLabel: {
-    color: colors.text.muted,
-    fontSize: 9,
-    letterSpacing: 1.2,
-    fontWeight: '700',
-  },
-  statVal: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: '800',
-    marginTop: 2,
-  },
-  mapSwitchRow: {
-    flexDirection: 'row',
-    width: '100%',
-    backgroundColor: '#0F131A',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderWidth: 1,
-    borderRadius: borderRadius.md,
-    padding: 3,
-    marginBottom: spacing.xs,
-    gap: 4,
-  },
-  mapSwitchBtn: {
-    flex: 1,
-    paddingVertical: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: borderRadius.sm,
-  },
-  mapSwitchBtnActive: {
-    backgroundColor: 'rgba(0, 229, 255, 0.2)',
-    borderColor: colors.runner.primary,
-    borderWidth: 1,
-  },
-  mapSwitchText: {
-    color: colors.text.muted,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  mapSwitchTextActive: {
-    color: '#FFFFFF',
-  },
-  catchActionCard: {
-    marginVertical: spacing.sm,
-  },
-  catchActionTitle: {
-    color: colors.hunter.primary,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  catchActionSubtitle: {
-    color: colors.text.secondary,
-    fontSize: 11,
-    textAlign: 'center',
-    marginBottom: spacing.sm,
-  },
-  catchBtn: {
-    marginTop: 2,
-  },
-  feedbackCard: {
-    marginVertical: spacing.xs,
-    padding: spacing.sm,
-  },
-  feedbackText: {
-    color: colors.hunter.primary,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing.lg,
-  },
-  modalContent: {
-    backgroundColor: '#141414',
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    borderWidth: 1.5,
-    borderRadius: borderRadius.xl,
-    padding: spacing.xl,
-    width: '100%',
-    maxWidth: 360,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.6,
-    shadowRadius: 20,
-    elevation: 12,
-  },
-  modalTitle: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.base,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-    marginBottom: spacing.xs,
-  },
-  modalSubtitle: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-  },
-  pinWrapper: {
-    width: '100%',
-    alignItems: 'center',
-    position: 'relative',
-    marginBottom: spacing.xl,
-  },
-  pinBoxesRow: {
-    flexDirection: 'row',
-    gap: spacing.sm + 2,
-    justifyContent: 'center',
-  },
-  pinBox: {
-    width: 52,
-    height: 58,
-    borderRadius: borderRadius.md,
-    backgroundColor: '#1E1E1E',
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pinBoxActive: {
-    borderColor: colors.brand.gradientMid,
-    backgroundColor: 'rgba(232, 93, 59, 0.1)',
-  },
-  pinBoxFilled: {
-    borderColor: colors.brand.gradientEnd,
-  },
-  pinDigit: {
-    color: colors.text.primary,
-    fontSize: 26,
-    fontWeight: '900',
-    fontFamily: typography.fontFamily.mono,
-  },
-  hiddenInput: {
     position: 'absolute',
-    top: 0,
+    top: 12,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 20,
+  },
+  hudCircleBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  hudCircleBtnText: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#4B5563',
+  },
+  hudLeaveIcon: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#F45B36',
+  },
+  timerCapsule: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 22,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  timerCapsuleText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1C1C1E',
+    letterSpacing: -0.3,
+  },
+  floatingMapControls: {
+    position: 'absolute',
+    right: 16,
+    gap: 10,
+    zIndex: 20,
+  },
+  floatingMapControlsExpanded: {
+    bottom: 350,
+  },
+  floatingMapControlsCollapsed: {
+    bottom: 125,
+  },
+  mapActionBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  mapActionIcon: {
+    fontSize: 20,
+    color: '#1C1C1E',
+  },
+  floatingModeToggleWrapper: {
+    position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
-    opacity: 0.01,
-    color: 'transparent',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
     alignItems: 'center',
+    zIndex: 22,
   },
-  modalCancelBtn: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+  floatingModeToggleExpanded: {
+    bottom: 350,
   },
-
-  modalCancelText: {
-    color: colors.text.muted,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '700',
-    letterSpacing: 1,
+  floatingModeToggleCollapsed: {
+    bottom: 125,
+  },
+  floatingModeToggleBar: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(15, 19, 26, 0.92)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: 3,
+    gap: 4,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  floatingModeBtn: {
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  floatingModeBtnActiveStreet: {
+    backgroundColor: '#1E293B',
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+    borderWidth: 1,
+  },
+  floatingModeBtnActiveSat: {
+    backgroundColor: '#0E7490',
+    borderColor: '#22D3EE',
+    borderWidth: 1,
+  },
+  floatingModeText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  floatingModeTextActive: {
+    color: '#FFFFFF',
+  },
+  bottomDrawerWrapper: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 25,
   },
 });

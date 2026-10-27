@@ -1,26 +1,64 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Badge, Button, Card } from '@/components/ui';
+import { Ionicons } from '@expo/vector-icons';
+import { Badge, Button, Card, Screen, TopBar } from '@/components/ui';
 import { useLocation } from '@/hooks/useLocation';
+import { progressionService } from '@/services/progression/progressionService';
 import { useLobbyStore } from '@/store/lobbyStore';
-import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
+import { borderRadius, colors, shadows, spacing, typography } from '@/theme/tokens';
 
 export default function MatchResultsScreen() {
   const router = useRouter();
   const { session, lobbyState, leaveMatch } = useLobbyStore();
   const { stopTracking } = useLocation();
+  const [reward, setReward] = useState<{ xp: number } | null>(null);
 
   // Stop location tracking immediately upon entering results screen
   useEffect(() => {
     stopTracking();
-  }, [stopTracking]);
+
+    const isRunner = session?.myRole === 'RUNNER';
+    const players = lobbyState?.players ?? [];
+    const runners = players.filter((p) => p.role === 'RUNNER');
+    const livingRunners = runners.filter(
+      (p) => p.status === 'ALIVE' && p.heartsRemaining > 0
+    );
+    const chasersWin = livingRunners.length === 0;
+    const isVictory = isRunner ? !chasersWin : chasersWin;
+
+    progressionService
+      .recordMatchResult({
+        gameId: session?.gameId || 'match-debrief',
+        role: session?.myRole === 'RUNNER' ? 'RUNNER' : 'HUNTER',
+        result: isVictory
+          ? isRunner
+            ? 'ESCAPED'
+            : 'VICTORY'
+          : isRunner
+          ? 'CAUGHT'
+          : 'DEFEAT',
+        durationMinutes: lobbyState?.settings.durationMinutes ?? 30,
+      })
+      .then((res) => {
+        setReward({ xp: res.xpEarned });
+      })
+      .catch(() => {});
+  }, [
+    stopTracking,
+    session?.myRole,
+    session?.gameId,
+    lobbyState?.players,
+    lobbyState?.settings.durationMinutes,
+  ]);
 
   const players = lobbyState?.players ?? [];
+  const chasers = players.filter((p) => p.role === 'HUNTER');
   const runners = players.filter((p) => p.role === 'RUNNER');
-  const livingRunners = runners.filter((p) => p.status === 'ALIVE' && p.heartsRemaining > 0);
-  const huntersWin = livingRunners.length === 0;
+  const livingRunners = runners.filter(
+    (p) => p.status === 'ALIVE' && p.heartsRemaining > 0
+  );
+  const chasersWin = livingRunners.length === 0;
 
   const handleReturnHome = async () => {
     await leaveMatch();
@@ -28,158 +66,185 @@ export default function MatchResultsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Victory Header */}
-        <View style={styles.header}>
-          <Text style={styles.eyebrow}>OPERATION CONCLUDED</Text>
+    <Screen scroll>
+      <TopBar title="MISSION DEBRIEF" onBack={handleReturnHome} />
+
+      <View style={styles.container}>
+        {/* Victory / Defeat Header */}
+        <Card variant="portal" style={styles.headerCard}>
+          <View
+            style={[
+              styles.iconCircle,
+              { backgroundColor: chasersWin ? colors.hunter.primary : colors.runner.primary },
+            ]}
+          >
+            <Ionicons
+              name={chasersWin ? 'flag' : 'shield-checkmark'}
+              size={36}
+              color="#FFFFFF"
+            />
+          </View>
+
           <Text
             style={[
               styles.victoryTitle,
-              { color: huntersWin ? colors.hunter.primary : colors.runner.primary },
+              { color: chasersWin ? colors.hunter.primary : colors.runner.primary },
             ]}
           >
-            {huntersWin ? 'HUNTERS TRIUMPH' : 'RUNNERS SURVIVE'}
+            {chasersWin ? 'CHASERS TRIUMPH' : 'RUNNERS SURVIVE'}
           </Text>
-          <Text style={styles.victorySub}>
-            {huntersWin
-              ? 'All runners were eliminated before the timer expired.'
-              : 'At least one runner successfully evaded capture until zero hour.'}
-          </Text>
-        </View>
 
-        {/* Match Statistics */}
-        <Card variant={huntersWin ? 'hunter' : 'runner'} style={styles.statsCard}>
-          <Text style={styles.statsTitle}>MISSION DEBRIEF</Text>
+          <Text style={styles.victorySub}>
+            {chasersWin
+              ? 'All runners were eliminated before the mission timer expired.'
+              : 'At least one runner successfully evaded capture until the zero hour.'}
+          </Text>
+
+          {/* XP Reward Badge (Coins hidden per requirement) */}
+          {reward && (
+            <View style={styles.rewardBanner}>
+              <Ionicons name="flash" size={16} color="#D97706" />
+              <Text style={styles.rewardText}>+{reward.xp} OPERATIVE XP EARNED</Text>
+            </View>
+          )}
+        </Card>
+
+        {/* Mission Statistics Breakdown */}
+        <Text style={styles.sectionTitle}>SQUAD PERFORMANCE</Text>
+        <Card variant="portal" style={styles.statsCard}>
           <View style={styles.statRow}>
-            <Text style={styles.statLabel}>WINNING SQUAD:</Text>
+            <Text style={styles.statLabel}>WINNING SQUAD</Text>
             <Badge
-              label={huntersWin ? 'HUNTERS' : 'RUNNERS'}
-              variant={huntersWin ? 'hunter' : 'runner'}
+              label={chasersWin ? 'CHASERS' : 'RUNNERS'}
+              variant={chasersWin ? 'hunter' : 'runner'}
             />
           </View>
+
           <View style={styles.statRow}>
-            <Text style={styles.statLabel}>TOTAL RUNNERS:</Text>
+            <Text style={styles.statLabel}>TOTAL OPERATIVES</Text>
+            <Text style={styles.statVal}>{players.length}</Text>
+          </View>
+
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>CHASERS DEPLOYED</Text>
+            <Text style={styles.statVal}>{chasers.length}</Text>
+          </View>
+
+          <View style={styles.statRow}>
+            <Text style={styles.statLabel}>RUNNERS TARGETED</Text>
             <Text style={styles.statVal}>{runners.length}</Text>
           </View>
-          <View style={styles.statRow}>
-            <Text style={styles.statLabel}>RUNNERS ELIMINATED:</Text>
-            <Text style={styles.statVal}>
-              {runners.length - livingRunners.length}
-            </Text>
-          </View>
-          <View style={styles.statRow}>
-            <Text style={styles.statLabel}>RUNNERS SURVIVED:</Text>
-            <Text style={styles.statVal}>{livingRunners.length}</Text>
-          </View>
-          <View style={styles.statRow}>
-            <Text style={styles.statLabel}>MATCH DURATION:</Text>
-            <Text style={styles.statVal}>
-              {lobbyState?.settings.durationMinutes ?? 30} Minutes
+
+          <View style={[styles.statRow, { borderBottomWidth: 0 }]}>
+            <Text style={styles.statLabel}>SURVIVING EVADERS</Text>
+            <Text
+              style={[
+                styles.statVal,
+                { color: livingRunners.length > 0 ? colors.status.safe : colors.status.danger },
+              ]}
+            >
+              {livingRunners.length}
             </Text>
           </View>
         </Card>
 
-        {/* Privacy Termination Notice */}
-        <Card style={styles.privacyCard}>
-          <Text style={styles.privacyHeading}>🔒 Location Tracking Terminated</Text>
-          <Text style={styles.privacyText}>
-            GPS collection has been stopped. Location breadcrumbs and transient
-            game logs will be purged from memory in accordance with our 5-minute
-            retention doctrine.
-          </Text>
-        </Card>
-
-        {/* Return Button */}
-        <Button
-          title="RETURN TO HOME"
-          variant="gradient"
-          size="lg"
-          fullWidth
-          onPress={handleReturnHome}
-          style={styles.returnBtn}
-        />
-      </ScrollView>
-    </SafeAreaView>
+        {/* Action Button */}
+        <View style={styles.buttonContainer}>
+          <Button
+            title="RETURN TO MISSION HUB"
+            variant="gradient"
+            size="lg"
+            fullWidth
+            onPress={handleReturnHome}
+          />
+        </View>
+      </View>
+    </Screen>
   );
 }
 
-
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background.base,
-  },
   container: {
-    padding: spacing.lg,
-    justifyContent: 'center',
+    padding: spacing.md,
   },
-  header: {
+  headerCard: {
+    padding: spacing.xl,
+    borderRadius: borderRadius.xl,
     alignItems: 'center',
-    marginVertical: spacing.xl,
+    marginBottom: spacing.lg,
   },
-  eyebrow: {
-    color: colors.text.muted,
-    fontSize: typography.fontSize.xs,
-    letterSpacing: 2,
-    fontWeight: '800',
-    marginBottom: spacing.xs,
+  iconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
+    ...shadows.md,
   },
   victoryTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '900',
-    letterSpacing: 2,
+    letterSpacing: typography.letterSpacing.tactical,
     textAlign: 'center',
   },
   victorySub: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
+    fontSize: typography.fontSize.xs,
+    color: colors.text.muted,
     textAlign: 'center',
-    marginTop: spacing.xs,
-    lineHeight: 20,
-    maxWidth: 280,
+    marginTop: 6,
+    lineHeight: 18,
+    paddingHorizontal: spacing.md,
+  },
+  rewardBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: borderRadius.full,
+    marginTop: spacing.lg,
+  },
+  rewardText: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '800',
+    color: '#D97706',
+    letterSpacing: 0.8,
+  },
+  sectionTitle: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    letterSpacing: typography.letterSpacing.tactical,
+    color: colors.text.muted,
+    marginBottom: spacing.xs,
+    marginLeft: 4,
   },
   statsCard: {
-    marginBottom: spacing.md,
-  },
-  statsTitle: {
-    color: colors.text.primary,
-    fontWeight: '800',
-    fontSize: typography.fontSize.sm,
-    letterSpacing: 1.5,
-    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: borderRadius.xl,
+    marginBottom: spacing.xl,
   },
   statRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginVertical: spacing.xs,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border.default,
   },
   statLabel: {
-    color: colors.text.muted,
     fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    color: colors.text.muted,
+    letterSpacing: 0.8,
   },
   statVal: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: '700',
-  },
-  privacyCard: {
-    marginVertical: spacing.sm,
-    borderColor: colors.status.safe,
-  },
-  privacyHeading: {
-    color: colors.status.safe,
-    fontSize: typography.fontSize.xs,
+    fontSize: typography.fontSize.base,
     fontWeight: '800',
-    marginBottom: 4,
+    color: colors.text.primary,
   },
-  privacyText: {
-    color: colors.text.secondary,
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  returnBtn: {
-    marginTop: spacing.lg,
+  buttonContainer: {
+    marginBottom: spacing.xxl,
   },
 });

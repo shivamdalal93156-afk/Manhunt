@@ -24,12 +24,16 @@ const DANGER_ZONE_RADIUS = DIAL_RADIUS * 0.36; // 0m - 35m
 const WARNING_ZONE_RADIUS = DIAL_RADIUS * 0.70; // 35m - 100m
 const OUTER_ZONE_RADIUS = DIAL_RADIUS * 0.94; // 100m - 300m
 
+import { ZoneEvaluationResult } from '@/lib/geo/battleRoyaleZone';
+
 export interface ProcessedHunterThreat {
   playerId: string;
   displayName: string;
   distanceMeters: number;
   relativeBearingDegrees: number;
-  threatLevel: 'DANGER' | 'WARNING' | 'AWARENESS';
+  threatLevel: 'DANGER' | 'WARNING' | 'AWARENESS' | 'FRIENDLY';
+  targetType: 'HUNTER' | 'RUNNER';
+  clusterCount?: number;
   x: number;
   y: number;
 }
@@ -38,16 +42,22 @@ interface DirectionalCompassProps {
   telemetry: ThreatTelemetry;
   deviceHeading?: number | null;
   hunters?: HunterSnapshot[];
+  friendlyRunners?: HunterSnapshot[];
   runnerLocation?: GPSLocation | null;
   maxRadarRangeMeters?: number;
+  dynamicZone?: ZoneEvaluationResult | null;
+  isNightStealth?: boolean;
 }
 
 export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
   telemetry,
   deviceHeading,
   hunters = [],
+  friendlyRunners = [],
   runnerLocation,
   maxRadarRangeMeters = 300,
+  dynamicZone,
+  isNightStealth = false,
 }) => {
   const [selectedHunterId, setSelectedHunterId] = useState<string | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -78,60 +88,52 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
     }
   }, [isAnyHunterDangerous, pulseAnim]);
 
-  // Map each Hunter to true polar 2D radar coordinates with anti-overlap positioning
-  const processedHunters = useMemo<ProcessedHunterThreat[]>(() => {
-    if (hunters.length === 0) return [];
+  // Map Hunters and Friendly Runners to true polar 2D radar coordinates with anti-overlap positioning
+  const processedOperatives = useMemo<ProcessedHunterThreat[]>(() => {
+    if (hunters.length === 0 && friendlyRunners.length === 0) return [];
 
     const effectiveLoc = runnerLocation ?? { latitude: 37.7749, longitude: -122.4194 };
     const effectiveHeading = deviceHeading ?? 0;
 
-    // 1. Calculate raw distance and relative bearing for all hunters
     const list: Array<{
       playerId: string;
       displayName: string;
       distanceMeters: number;
       relativeBearingDegrees: number;
-      threatLevel: 'DANGER' | 'WARNING' | 'AWARENESS';
+      threatLevel: 'DANGER' | 'WARNING' | 'AWARENESS' | 'FRIENDLY';
+      targetType: 'HUNTER' | 'RUNNER';
       r: number;
       rawX: number;
       rawY: number;
     }> = [];
 
+    // Process Hunters
     for (const h of hunters) {
       const dist = haversineDistance(effectiveLoc, {
         latitude: h.latitude,
         longitude: h.longitude,
       });
-
       const bearing = initialBearing(effectiveLoc, {
         latitude: h.latitude,
         longitude: h.longitude,
       });
-
       const relBearing = relativeBearing(effectiveHeading, bearing) ?? 0;
 
       let threatLevel: 'DANGER' | 'WARNING' | 'AWARENESS' = 'AWARENESS';
       let r = 0;
-
-      // Non-linear concentric zone mapping so near hunters have maximum spacing
       if (dist <= 35) {
         threatLevel = 'DANGER';
-        // Map 0-35m to range [18, DANGER_ZONE_RADIUS]
         r = 18 + (dist / 35) * (DANGER_ZONE_RADIUS - 18);
       } else if (dist <= 100) {
         threatLevel = 'WARNING';
-        // Map 35-100m to range [DANGER_ZONE_RADIUS + 4, WARNING_ZONE_RADIUS]
         const frac = (dist - 35) / (100 - 35);
         r = DANGER_ZONE_RADIUS + 4 + frac * (WARNING_ZONE_RADIUS - DANGER_ZONE_RADIUS - 4);
       } else {
         threatLevel = 'AWARENESS';
-        // Map 100-300m to range [WARNING_ZONE_RADIUS + 4, OUTER_ZONE_RADIUS]
         const frac = Math.min(1, (dist - 100) / (maxRadarRangeMeters - 100));
         r = WARNING_ZONE_RADIUS + 4 + frac * (OUTER_ZONE_RADIUS - WARNING_ZONE_RADIUS - 6);
       }
 
-      // Convert polar (r, theta) to canvas Cartesian (x, y) relative to center
-      // 0 deg is North (Up), 90 deg is East (Right), 180 deg is South (Down)
       const rad = ((relBearing - 90) * Math.PI) / 180;
       const rawX = DIAL_RADIUS + r * Math.cos(rad);
       const rawY = DIAL_RADIUS + r * Math.sin(rad);
@@ -142,23 +144,65 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         distanceMeters: dist,
         relativeBearingDegrees: relBearing,
         threatLevel,
+        targetType: 'HUNTER',
         r,
         rawX,
         rawY,
       });
     }
 
-    // Sort by proximity (closest first)
+    // Process Friendly Runners (allies)
+    for (const fr of friendlyRunners) {
+      const dist = haversineDistance(effectiveLoc, {
+        latitude: fr.latitude,
+        longitude: fr.longitude,
+      });
+      const bearing = initialBearing(effectiveLoc, {
+        latitude: fr.latitude,
+        longitude: fr.longitude,
+      });
+      const relBearing = relativeBearing(effectiveHeading, bearing) ?? 0;
+
+      let r = 0;
+      if (dist <= 35) {
+        r = 18 + (dist / 35) * (DANGER_ZONE_RADIUS - 18);
+      } else if (dist <= 100) {
+        const frac = (dist - 35) / (100 - 35);
+        r = DANGER_ZONE_RADIUS + 4 + frac * (WARNING_ZONE_RADIUS - DANGER_ZONE_RADIUS - 4);
+      } else {
+        const frac = Math.min(1, (dist - 100) / (maxRadarRangeMeters - 100));
+        r = WARNING_ZONE_RADIUS + 4 + frac * (OUTER_ZONE_RADIUS - WARNING_ZONE_RADIUS - 6);
+      }
+
+      const rad = ((relBearing - 90) * Math.PI) / 180;
+      const rawX = DIAL_RADIUS + r * Math.cos(rad);
+      const rawY = DIAL_RADIUS + r * Math.sin(rad);
+
+      list.push({
+        playerId: fr.playerId,
+        displayName: fr.displayName || 'Ally',
+        distanceMeters: dist,
+        relativeBearingDegrees: relBearing,
+        threatLevel: 'FRIENDLY',
+        targetType: 'RUNNER',
+        r,
+        rawX,
+        rawY,
+      });
+    }
+
+    // Sort by proximity
     list.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
-    // 2. Anti-Overlap Separation Pass:
-    // If two hunter blips are visually closer than 26 pixels, nudge them apart along their line
+    // Anti-Overlap & Same Distance Separation Pass
     const positioned: ProcessedHunterThreat[] = list.map((item) => ({
       playerId: item.playerId,
       displayName: item.displayName,
       distanceMeters: item.distanceMeters,
       relativeBearingDegrees: item.relativeBearingDegrees,
       threatLevel: item.threatLevel,
+      targetType: item.targetType,
+      clusterCount: 1,
       x: item.rawX,
       y: item.rawY,
     }));
@@ -168,9 +212,23 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         const dx = positioned[j].x - positioned[i].x;
         const dy = positioned[j].y - positioned[i].y;
         const distPx = Math.sqrt(dx * dx + dy * dy);
-        const MIN_SEP = 26; // minimum pixel separation between blip centers
+        const MIN_SEP = 26;
 
-        if (distPx < MIN_SEP && distPx > 0.001) {
+        if (distPx <= 0.001 || (distPx < MIN_SEP && Math.abs(positioned[i].distanceMeters - positioned[j].distanceMeters) < 4)) {
+          // Multiple operatives clustered at identical/very close distance & bearing
+          positioned[i].clusterCount = (positioned[i].clusterCount || 1) + 1;
+          positioned[j].clusterCount = (positioned[j].clusterCount || 1) + 1;
+
+          // Tangential spread along the distance circle arc
+          const rad = ((positioned[i].relativeBearingDegrees - 90) * Math.PI) / 180;
+          const tx = -Math.sin(rad) * (MIN_SEP / 2);
+          const ty = Math.cos(rad) * (MIN_SEP / 2);
+
+          positioned[i].x -= tx;
+          positioned[i].y -= ty;
+          positioned[j].x += tx;
+          positioned[j].y += ty;
+        } else if (distPx < MIN_SEP) {
           const overlap = (MIN_SEP - distPx) / 2;
           const nx = (dx / distPx) * overlap;
           const ny = (dy / distPx) * overlap;
@@ -184,7 +242,17 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
     }
 
     return positioned;
-  }, [runnerLocation, hunters, deviceHeading, maxRadarRangeMeters]);
+  }, [runnerLocation, hunters, friendlyRunners, deviceHeading, maxRadarRangeMeters]);
+
+  const processedHunters = useMemo(
+    () => processedOperatives.filter((op) => op.targetType === 'HUNTER'),
+    [processedOperatives]
+  );
+
+  const processedAllies = useMemo(
+    () => processedOperatives.filter((op) => op.targetType === 'RUNNER'),
+    [processedOperatives]
+  );
 
   // Calculate Safest Escape Arc: find the largest angular gap between approaching hunters
   const escapeDirection = useMemo<{ angle: number; cardinal: string } | null>(() => {
@@ -221,6 +289,36 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
     return { angle: escapeAngle, cardinal: getCardinal(escapeAngle) };
   }, [processedHunters]);
 
+  // Dynamic Safe Zone Shrink Vector: indicates direction and proximity of shrinking safe zone
+  const safeZoneVector = useMemo<{
+    angle: number;
+    cardinal: string;
+    distanceMeters: number;
+    isOutside: boolean;
+    phaseState: string;
+    phaseText: string;
+  } | null>(() => {
+    if (!dynamicZone || dynamicZone.mode === 'NONE') return null;
+
+    const effectiveLoc = runnerLocation ?? { latitude: 37.7749, longitude: -122.4194 };
+    const effectiveHeading = deviceHeading ?? 0;
+    const target = dynamicZone.nextSafeCircle ?? dynamicZone.currentCircle;
+    if (!target) return null;
+
+    const dist = haversineDistance(effectiveLoc, target.center);
+    const bearing = initialBearing(effectiveLoc, target.center);
+    const relBearing = relativeBearing(effectiveHeading, bearing) ?? 0;
+
+    return {
+      angle: relBearing,
+      cardinal: getCardinal(relBearing),
+      distanceMeters: Math.round(dist),
+      isOutside: !dynamicZone.isInsideActiveZone,
+      phaseState: dynamicZone.phaseState,
+      phaseText: `PHASE ${dynamicZone.phaseNumber}/${dynamicZone.totalPhases}`,
+    };
+  }, [dynamicZone, runnerLocation, deviceHeading]);
+
   const nearestHunter = processedHunters[0];
 
   return (
@@ -229,10 +327,13 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
       <Animated.View
         style={[
           styles.outerDial,
+          !isNightStealth && styles.outerDialLight,
           {
             borderColor: isAnyHunterDangerous
               ? colors.status.danger
-              : 'rgba(255, 255, 255, 0.14)',
+              : isNightStealth
+              ? 'rgba(255, 255, 255, 0.14)'
+              : '#CBD5E1',
             transform: [{ scale: pulseAnim }],
           },
         ]}
@@ -240,9 +341,9 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
         {/* Cardinal Directions */}
         <View style={styles.tickRing} pointerEvents="none">
           <Text style={styles.dialNorth}>N</Text>
-          <Text style={styles.dialEast}>E</Text>
-          <Text style={styles.dialSouth}>S</Text>
-          <Text style={styles.dialWest}>W</Text>
+          <Text style={[styles.dialEast, !isNightStealth && styles.dialTextLight]}>E</Text>
+          <Text style={[styles.dialSouth, !isNightStealth && styles.dialTextLight]}>S</Text>
+          <Text style={[styles.dialWest, !isNightStealth && styles.dialTextLight]}>W</Text>
         </View>
 
         {/* Concentric Zone 3: Outer Awareness Range (100m - 300m) */}
@@ -253,12 +354,12 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
               width: WARNING_ZONE_RADIUS * 2,
               height: WARNING_ZONE_RADIUS * 2,
               borderRadius: WARNING_ZONE_RADIUS,
-              borderColor: 'rgba(255, 255, 255, 0.08)',
+              borderColor: isNightStealth ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)',
             },
           ]}
           pointerEvents="none"
         >
-          <Text style={styles.rangeLabel}>100m</Text>
+          <Text style={[styles.rangeLabel, !isNightStealth && styles.rangeLabelLight]}>100m</Text>
         </View>
 
         {/* Concentric Zone 2: Warning Range (35m - 100m) */}
@@ -274,7 +375,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
           ]}
           pointerEvents="none"
         >
-          <Text style={[styles.rangeLabel, { color: colors.status.warning }]}>35m</Text>
+          <Text style={[styles.rangeLabel, { color: colors.status.warning }, !isNightStealth && styles.rangeLabelLight]}>35m</Text>
         </View>
 
         {/* Safest Escape Vector Indicator */}
@@ -291,6 +392,39 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
           </View>
         )}
 
+        {/* Dynamic Shrinking Safe Zone Indicator */}
+        {safeZoneVector && (
+          <View
+            style={[
+              styles.safeZoneVectorWrapper,
+              { transform: [{ rotate: `${safeZoneVector.angle}deg` }] },
+            ]}
+            pointerEvents="none"
+          >
+            <View
+              style={[
+                styles.safeZoneArrow,
+                safeZoneVector.isOutside && styles.safeZoneArrowOutside,
+              ]}
+            />
+            <View
+              style={[
+                styles.safeZoneTagBadge,
+                safeZoneVector.isOutside && styles.safeZoneTagBadgeOutside,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.safeZoneTagText,
+                  safeZoneVector.isOutside && styles.safeZoneTagTextOutside,
+                ]}
+              >
+                {safeZoneVector.isOutside ? 'RETREAT' : 'SAFE'}
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Center Runner Hub (YOU) */}
         <View style={styles.centerRunnerHub} pointerEvents="none">
           <View style={styles.runnerIconPill}>
@@ -299,14 +433,17 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
           </View>
         </View>
 
-        {/* Render ALL Hunters simultaneously with depth-coded blips */}
-        {processedHunters.map((h, idx) => {
-          const isNearest = idx === 0;
-          const isSelected = selectedHunterId === h.playerId;
-          const isDanger = h.threatLevel === 'DANGER';
-          const isWarning = h.threatLevel === 'WARNING';
+        {/* Render ALL Operatives (Hunters & Friendly Runners) simultaneously with depth-coded blips */}
+        {processedOperatives.map((op, idx) => {
+          const isNearestHunter = op.targetType === 'HUNTER' && processedHunters[0]?.playerId === op.playerId;
+          const isSelected = selectedHunterId === op.playerId;
+          const isDanger = op.threatLevel === 'DANGER';
+          const isWarning = op.threatLevel === 'WARNING';
+          const isAlly = op.targetType === 'RUNNER';
 
-          const blipBg = isDanger
+          const blipBg = isAlly
+            ? '#0284C7'
+            : isDanger
             ? colors.status.danger
             : isWarning
             ? colors.status.warning
@@ -314,14 +451,14 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
 
           return (
             <TouchableOpacity
-              key={h.playerId}
-              onPress={() => setSelectedHunterId(h.playerId)}
+              key={op.playerId}
+              onPress={() => setSelectedHunterId(op.playerId)}
               activeOpacity={0.8}
               style={[
                 styles.hunterBlipContainer,
                 {
-                  left: h.x - (isNearest ? 14 : 11),
-                  top: h.y - (isNearest ? 14 : 11),
+                  left: op.x - (isNearestHunter ? 14 : 11),
+                  top: op.y - (isNearestHunter ? 14 : 11),
                 },
               ]}
             >
@@ -343,25 +480,34 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
                   styles.hunterBlipCore,
                   {
                     backgroundColor: blipBg,
-                    width: isNearest ? 18 : 14,
-                    height: isNearest ? 18 : 14,
-                    borderRadius: isNearest ? 9 : 7,
+                    width: isNearestHunter ? 18 : 14,
+                    height: isNearestHunter ? 18 : 14,
+                    borderRadius: isNearestHunter ? 9 : 7,
                     borderColor: '#0B0E14',
                     borderWidth: 2,
                   },
                 ]}
               >
                 <Text style={styles.blipInitial}>
-                  {h.displayName.charAt(0).toUpperCase()}
+                  {isAlly ? '🏃' : op.displayName.charAt(0).toUpperCase()}
                 </Text>
               </View>
+
+              {/* Clustered Operatives Count Badge (when >1 target at same distance/location) */}
+              {op.clusterCount && op.clusterCount > 1 ? (
+                <View style={styles.clusterBadge}>
+                  <Text style={styles.clusterBadgeText}>×{op.clusterCount}</Text>
+                </View>
+              ) : null}
 
               {/* Compact Distance Badge */}
               <View
                 style={[
                   styles.distanceTag,
                   {
-                    backgroundColor: isDanger
+                    backgroundColor: isAlly
+                      ? 'rgba(2, 132, 199, 0.92)'
+                      : isDanger
                       ? 'rgba(239, 68, 68, 0.92)'
                       : isWarning
                       ? 'rgba(245, 158, 11, 0.90)'
@@ -371,15 +517,15 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
                 ]}
               >
                 <Text style={styles.distanceTagText}>
-                  {Math.round(h.distanceMeters)}m
+                  {Math.round(op.distanceMeters)}m
                 </Text>
               </View>
             </TouchableOpacity>
           );
         })}
 
-        {/* If no hunters detected yet */}
-        {processedHunters.length === 0 && (
+        {/* If no operatives detected yet */}
+        {processedOperatives.length === 0 && (
           <View style={styles.radarClearHub} pointerEvents="none">
             <Text style={styles.clearText}>RADAR</Text>
             <Text style={styles.clearSub}>SCANNING</Text>
@@ -389,7 +535,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
       </Animated.View>
 
       {/* Primary Action Guidance Banner */}
-      <View style={styles.guidanceBanner}>
+      <View style={[styles.guidanceBanner, isNightStealth ? styles.guidanceBannerNight : styles.guidanceBannerLight]}>
         {nearestHunter ? (
           <View style={styles.guidanceRow}>
             <View style={styles.guidanceLeft}>
@@ -418,7 +564,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
                   {nearestHunter.threatLevel === 'DANGER' ? 'LETHAL THREAT' : 'APPROACHING'}
                 </Text>
               </View>
-              <Text style={styles.guidanceTitle}>
+              <Text style={[styles.guidanceTitle, isNightStealth ? styles.guidanceTitleNight : styles.guidanceTitleLight]}>
                 {nearestHunter.displayName} is {Math.round(nearestHunter.distanceMeters)}m away
               </Text>
             </View>
@@ -432,20 +578,51 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
           </View>
         ) : (
           <View style={styles.guidanceRow}>
-            <Text style={styles.guidanceTitle}>No Hunters in radar range (300m)</Text>
+            <Text style={[styles.guidanceTitle, isNightStealth ? styles.guidanceTitleNight : styles.guidanceTitleLight]}>No Hunters in radar range (300m)</Text>
             <Badge label="SAFE" variant="safe" />
           </View>
         )}
       </View>
 
+      {/* Dynamic Zone Shrink Telemetry Strip */}
+      {safeZoneVector && (
+        <View
+          style={[
+            styles.zoneStatusCard,
+            safeZoneVector.isOutside ? styles.zoneStatusCardOutside : styles.zoneStatusCardInside,
+            !isNightStealth && !safeZoneVector.isOutside && styles.zoneStatusCardInsideLight,
+          ]}
+        >
+          <View style={styles.zoneStatusLeft}>
+            <View style={styles.zoneStatusBadge}>
+              <Text style={[styles.zoneStatusBadgeText, !isNightStealth && styles.zoneStatusBadgeTextLight]}>{safeZoneVector.phaseText}</Text>
+            </View>
+            <Text style={[styles.zoneStatusMainText, !isNightStealth && styles.zoneStatusMainTextLight]}>
+              {safeZoneVector.isOutside
+                ? `⚠️ OUTSIDE SAFE ZONE (${safeZoneVector.distanceMeters}m to center)`
+                : `Safe Zone active (${safeZoneVector.distanceMeters}m to center)`}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.zoneDirPill,
+              safeZoneVector.isOutside ? styles.zoneDirPillOutside : styles.zoneDirPillInside,
+            ]}
+          >
+            <Text style={styles.zoneDirPillSub}>ZONE</Text>
+            <Text style={styles.zoneDirPillText}>{safeZoneVector.cardinal}</Text>
+          </View>
+        </View>
+      )}
+
       {/* Ranked Multi-Hunter Proximity Strip (All Hunters at All Times) */}
       {processedHunters.length > 0 && (
-        <View style={styles.rosterCard}>
+        <View style={[styles.rosterCard, !isNightStealth && styles.rosterCardLight]}>
           <View style={styles.rosterHeader}>
-            <Text style={styles.rosterTitle}>
+            <Text style={[styles.rosterTitle, !isNightStealth && styles.rosterTitleLight]}>
               ACTIVE PURSUIT ROSTER ({processedHunters.length})
             </Text>
-            <Text style={styles.rosterSub}>Sorted by Proximity</Text>
+            <Text style={[styles.rosterSub, !isNightStealth && styles.rosterSubLight]}>Sorted by Proximity</Text>
           </View>
 
           <ScrollView
@@ -464,6 +641,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
                   onPress={() => setSelectedHunterId(h.playerId)}
                   style={[
                     styles.hunterPill,
+                    !isNightStealth && styles.hunterPillLight,
                     isDanger && styles.hunterPillDanger,
                     isWarning && styles.hunterPillWarning,
                     isSelected && styles.hunterPillSelected,
@@ -482,7 +660,7 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
                       },
                     ]}
                   />
-                  <Text style={styles.pillName} numberOfLines={1}>
+                  <Text style={[styles.pillName, !isNightStealth && styles.pillNameLight]} numberOfLines={1}>
                     #{i + 1} {h.displayName}
                   </Text>
                   <Text
@@ -493,18 +671,57 @@ export const DirectionalCompass: React.FC<DirectionalCompassProps> = ({
                           ? colors.status.danger
                           : isWarning
                           ? colors.status.warning
-                          : colors.text.primary,
+                          : isNightStealth
+                          ? colors.text.primary
+                          : '#0F172A',
                       },
                     ]}
                   >
                     {Math.round(h.distanceMeters)}m
                   </Text>
-                  <Text style={styles.pillBearing}>
+                  <Text style={[styles.pillBearing, !isNightStealth && styles.pillBearingLight]}>
                     {getCardinal(h.relativeBearingDegrees)}
                   </Text>
                 </TouchableOpacity>
               );
             })}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Friendly Runners Strip */}
+      {processedAllies.length > 0 && (
+        <View style={[styles.rosterCard, !isNightStealth && styles.rosterCardLight, { marginTop: spacing.xs }]}>
+          <View style={styles.rosterHeader}>
+            <Text style={[styles.rosterTitle, { color: '#0284C7' }]}>
+              ALLIED RUNNERS ({processedAllies.length})
+            </Text>
+            <Text style={[styles.rosterSub, !isNightStealth && styles.rosterSubLight]}>Teammates</Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.rosterScroll}
+          >
+            {processedAllies.map((a) => (
+              <TouchableOpacity
+                key={a.playerId}
+                style={[
+                  styles.hunterPill,
+                  !isNightStealth && styles.hunterPillLight,
+                  { borderColor: 'rgba(2, 132, 199, 0.4)' },
+                ]}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 10 }}>🏃</Text>
+                <Text style={[styles.pillName, !isNightStealth && styles.pillNameLight]} numberOfLines={1}>
+                  {a.displayName}
+                </Text>
+                <Text style={[styles.pillDist, { color: '#0284C7' }]}>
+                  {Math.round(a.distanceMeters)}m
+                </Text>
+              </TouchableOpacity>
+            ))}
           </ScrollView>
         </View>
       )}
@@ -546,6 +763,15 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 8,
   },
+  outerDialLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    elevation: 6,
+  },
   tickRing: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
@@ -558,6 +784,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 1,
+  },
+  dialTextLight: {
+    color: '#334155',
+    fontWeight: '800',
   },
   dialEast: {
     position: 'absolute',
@@ -595,6 +825,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
     backgroundColor: '#0D1117',
     paddingHorizontal: 3,
+  },
+  rangeLabelLight: {
+    backgroundColor: '#FFFFFF',
+    color: '#64748B',
   },
   centerRunnerHub: {
     position: 'absolute',
@@ -653,6 +887,120 @@ const styles = StyleSheet.create({
     color: '#10B981',
     letterSpacing: 1,
     marginTop: 1,
+  },
+  safeZoneVectorWrapper: {
+    position: 'absolute',
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    zIndex: 14,
+  },
+  safeZoneArrow: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderBottomWidth: 12,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: '#00E5FF',
+    marginTop: 3,
+  },
+  safeZoneArrowOutside: {
+    borderBottomColor: '#EF4444',
+  },
+  safeZoneTagBadge: {
+    backgroundColor: 'rgba(0, 229, 255, 0.18)',
+    borderColor: '#00E5FF',
+    borderWidth: 1,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+    marginTop: 2,
+  },
+  safeZoneTagBadgeOutside: {
+    backgroundColor: 'rgba(239, 68, 68, 0.28)',
+    borderColor: '#EF4444',
+  },
+  safeZoneTagText: {
+    color: '#00E5FF',
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  safeZoneTagTextOutside: {
+    color: '#EF4444',
+  },
+  zoneStatusCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 3,
+    marginTop: spacing.xs,
+    borderWidth: 1,
+  },
+  zoneStatusCardInside: {
+    backgroundColor: 'rgba(0, 229, 255, 0.06)',
+    borderColor: 'rgba(0, 229, 255, 0.3)',
+  },
+  zoneStatusCardOutside: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderColor: colors.status.danger,
+  },
+  zoneStatusLeft: {
+    flex: 1,
+  },
+  zoneStatusBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    marginBottom: 2,
+  },
+  zoneStatusBadgeText: {
+    color: colors.text.muted,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  zoneStatusMainText: {
+    color: colors.text.primary,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  zoneDirPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    minWidth: 50,
+  },
+  zoneDirPillInside: {
+    backgroundColor: 'rgba(0, 229, 255, 0.15)',
+    borderColor: '#00E5FF',
+    borderWidth: 1,
+  },
+  zoneDirPillOutside: {
+    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+    borderColor: '#EF4444',
+    borderWidth: 1,
+  },
+  zoneDirPillSub: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: colors.text.muted,
+    letterSpacing: 0.5,
+  },
+  zoneDirPillText: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#FFFFFF',
   },
   hunterBlipContainer: {
     position: 'absolute',
@@ -742,10 +1090,44 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1,
   },
+  guidanceBannerLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  guidanceBannerNight: {
+    backgroundColor: '#0A0F1D',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
   guidanceTitle: {
     color: colors.text.primary,
     fontSize: typography.fontSize.xs,
     fontWeight: '800',
+  },
+  guidanceTitleLight: {
+    color: '#0F172A',
+  },
+  guidanceTitleNight: {
+    color: '#E2E8F0',
+  },
+  zoneStatusCardInsideLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#0284C7',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  zoneStatusBadgeTextLight: {
+    color: '#0284C7',
+  },
+  zoneStatusMainTextLight: {
+    color: '#0F172A',
   },
   escapePill: {
     alignItems: 'center',
@@ -776,6 +1158,15 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
     marginTop: spacing.xs,
   },
+  rosterCardLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
   rosterHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -788,10 +1179,16 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1,
   },
+  rosterTitleLight: {
+    color: '#0F172A',
+  },
   rosterSub: {
     color: colors.text.muted,
     fontSize: 8,
     fontWeight: '600',
+  },
+  rosterSubLight: {
+    color: '#64748B',
   },
   rosterScroll: {
     flexDirection: 'row',
@@ -807,6 +1204,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: 5,
     gap: 5,
+  },
+  hunterPillLight: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
   },
   hunterPillDanger: {
     backgroundColor: 'rgba(239, 68, 68, 0.15)',
@@ -831,6 +1232,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     maxWidth: 75,
   },
+  pillNameLight: {
+    color: '#0F172A',
+  },
   pillDist: {
     fontSize: 11,
     fontWeight: '900',
@@ -839,5 +1243,25 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     fontSize: 9,
     fontWeight: '800',
+  },
+  pillBearingLight: {
+    color: '#64748B',
+  },
+  clusterBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    backgroundColor: '#DE3B7E',
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    zIndex: 10,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  clusterBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
   },
 });
