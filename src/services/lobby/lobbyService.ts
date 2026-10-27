@@ -9,17 +9,26 @@ import {
   PlayZoneSettings,
   ZoneShrinkMode,
 } from '@/types/lobby';
-import { guestAuth } from '@/services/auth/guestAuth';
+import { authService } from '@/services/auth/authService';
 import { supabase } from '@/services/supabase';
 
 export interface CreateMatchOptions {
   durationMinutes?: number;
   pingIntervalSeconds?: number;
   zoneRadiusMeters?: number;
+  headStartSeconds?: number;
   runnerHearts?: number;
   gameMode?: 'ONE_CATCH' | 'MULTI_HEARTS';
   customZoneCenter?: { lat: number; lng: number } | null;
   zoneShrinkMode?: ZoneShrinkMode;
+  allowSpectators?: boolean;
+  tacticalAbilities?: {
+    enabled: boolean;
+    allowedAbilities: string[];
+    maxUsesPerPlayer?: number | null;
+  };
+  hostProfile?: PlayerProfile;
+  playZone?: PlayZoneSettings;
 }
 
 export interface CatchSubmissionResult {
@@ -38,12 +47,18 @@ class LobbyService {
    * No local room fallback in production.
    */
   async createMatch(options: CreateMatchOptions = {}): Promise<MatchSession> {
-    const profile = await guestAuth.getGuestProfile();
-    await guestAuth.syncRemoteProfile(profile);
+    const user = options.hostProfile ? null : (authService.getCurrentUser() || (await authService.loadSession()));
+    const profile = options.hostProfile || (user
+      ? { id: user.id, displayName: user.displayName, isGuest: false }
+      : { id: 'operative-host', displayName: 'Host Operative', isGuest: false });
+    if (user) {
+      authService.syncDatabaseProfile(user).catch(() => {});
+    }
 
     const durationMinutes = options.durationMinutes ?? 30;
     const pingIntervalSeconds = options.pingIntervalSeconds ?? 30;
     const zoneRadiusMeters = options.zoneRadiusMeters ?? 500;
+    const headStartSeconds = options.headStartSeconds ?? 60;
 
     const { data, error } = await supabase.rpc('create_match', {
       p_host_profile_id: profile.id,
@@ -60,24 +75,28 @@ class LobbyService {
 
     const runnerHearts = options.runnerHearts ?? 3;
     const zoneShrinkMode: ZoneShrinkMode = options.zoneShrinkMode ?? 'NONE';
+    const allowSpectators = options.allowSpectators ?? true;
 
     const settings: MatchSettings = {
       durationMinutes,
-      headStartSeconds: 60,
+      headStartSeconds,
       locationPingIntervalSeconds: pingIntervalSeconds,
       maxPlayers: 30, // Hard 30-player limit
       runnerHearts,
       catchRadiusMeters: 15,
       zoneShrinkMode,
+      allowSpectators,
+      tacticalAbilities: options.tacticalAbilities,
     };
 
-    const playZone: PlayZoneSettings = {
+    const playZone: PlayZoneSettings = options.playZone || {
       type: 'circle',
       radiusMeters: zoneRadiusMeters,
       center: options.customZoneCenter
         ? [options.customZoneCenter.lng, options.customZoneCenter.lat]
         : undefined,
       shrinkMode: zoneShrinkMode,
+      mode: 'CIRCLE',
     };
 
     // Update settings and custom playZone in Supabase games table
@@ -87,21 +106,16 @@ class LobbyService {
         const updatePayload: Record<string, any> = {
           settings: {
             duration_minutes: durationMinutes,
-            head_start_seconds: 60,
+            head_start_seconds: headStartSeconds,
             location_ping_interval_seconds: pingIntervalSeconds,
             max_players: 30,
             runner_hearts: runnerHearts,
             catch_radius_meters: 15,
             zone_shrink_mode: zoneShrinkMode,
+            allow_spectators: allowSpectators,
+            tactical_abilities: options.tacticalAbilities,
           },
-          play_zone: {
-            type: 'circle',
-            radius_meters: zoneRadiusMeters,
-            shrink_mode: zoneShrinkMode,
-            ...(options.customZoneCenter
-              ? { center: [options.customZoneCenter.lng, options.customZoneCenter.lat] }
-              : {}),
-          },
+          play_zone: playZone,
         };
         await gamesTable.update(updatePayload).eq('id', data.game_id);
       }
@@ -132,8 +146,16 @@ class LobbyService {
     preferredRole: PlayerRole = 'RUNNER',
     guestProfile?: PlayerProfile
   ): Promise<MatchSession> {
-    const profile = guestProfile || (await guestAuth.getGuestProfile());
-    await guestAuth.syncRemoteProfile(profile);
+    let profile = guestProfile;
+    if (!profile) {
+      const user = authService.getCurrentUser() || (await authService.loadSession());
+      profile = user
+        ? { id: user.id, displayName: user.displayName, isGuest: false }
+        : { id: `operative-${Date.now()}`, displayName: 'Operative', isGuest: false };
+      if (user) {
+        authService.syncDatabaseProfile(user).catch(() => {});
+      }
+    }
     const cleanCode = joinCode.trim().toUpperCase();
 
     if (!cleanCode || cleanCode.length !== 6) {
@@ -152,22 +174,44 @@ class LobbyService {
       );
     }
 
-    // Fetch configured match settings
+    // Fetch configured match settings and status
     let gData: any = null;
     let runnerHearts = 3;
     try {
       const gamesTable = supabase?.from ? supabase.from('games') : null;
       if (gamesTable && typeof gamesTable.select === 'function') {
         const res = await gamesTable
-          .select('settings, play_zone, host_profile_id')
+          .select('status, settings, play_zone, host_profile_id')
           .eq('id', data.game_id)
           .single();
         gData = res?.data;
         if (gData?.settings) {
           runnerHearts = gData.settings.runner_hearts ?? gData.settings.runnerHearts ?? 3;
         }
+
+        // Mid-game check: If match has already started (ACTIVE / IN_PROGRESS)
+        if (gData?.status === 'ACTIVE' || gData?.status === 'IN_PROGRESS') {
+          const allowSpectators =
+            gData.settings?.allow_spectators ?? gData.settings?.allowSpectators ?? false;
+          if (!allowSpectators) {
+            throw new Error(
+              'This match has already started. Mid-game joining and spectator access are disabled by the host.'
+            );
+          }
+          if (preferredRole !== 'SPECTATOR') {
+            throw new Error(
+              'This match is already in progress. You may only join as a spectator.'
+            );
+          }
+        }
       }
-    } catch {
+    } catch (err: unknown) {
+      if (
+        err instanceof Error &&
+        (err.message.includes('already started') || err.message.includes('already in progress'))
+      ) {
+        throw err;
+      }
       // Fallback for mock environments
     }
 
@@ -292,12 +336,13 @@ class LobbyService {
    * Authoritatively starts the match using server-side RPC.
    * Server validates host identity, minimum roster (1 Hunter, 1 Runner), and atomic state.
    */
-  async startMatch(gameId: string): Promise<void> {
-    const profile = await guestAuth.getGuestProfile();
+  async startMatch(gameId: string, hostProfileIdOverride?: string): Promise<void> {
+    const hostProfileId =
+      hostProfileIdOverride || authService.getCurrentUser()?.id || 'host-profile';
 
     const { data, error } = await supabase.rpc('start_match_authoritative', {
       p_game_id: gameId,
-      p_host_profile_id: profile.id,
+      p_host_profile_id: hostProfileId,
     });
 
     if (error) {
@@ -398,6 +443,72 @@ class LobbyService {
       isEliminated: data?.is_eliminated,
       allRunnersEliminated: data?.all_runners_eliminated,
     };
+  }
+
+  /**
+   * Updates host settings on the server for an existing match row.
+   */
+  async updateGameSettings(
+    gameId: string,
+    settingsUpdate: Partial<MatchSettings>,
+    playZoneUpdate?: PlayZoneSettings
+  ): Promise<void> {
+    const { data: game, error: readErr } = await supabase
+      .from('games')
+      .select('settings, play_zone')
+      .eq('id', gameId)
+      .single();
+
+    if (readErr || !game) {
+      throw new Error(readErr?.message || 'Game not found on server.');
+    }
+
+    const currentSettings = game.settings || {};
+    const newSettings = {
+      ...currentSettings,
+      ...(settingsUpdate.durationMinutes !== undefined && {
+        duration_minutes: settingsUpdate.durationMinutes,
+        durationMinutes: settingsUpdate.durationMinutes,
+      }),
+      ...(settingsUpdate.locationPingIntervalSeconds !== undefined && {
+        location_ping_interval_seconds: settingsUpdate.locationPingIntervalSeconds,
+        locationPingIntervalSeconds: settingsUpdate.locationPingIntervalSeconds,
+      }),
+      ...(settingsUpdate.headStartSeconds !== undefined && {
+        head_start_seconds: settingsUpdate.headStartSeconds,
+        headStartSeconds: settingsUpdate.headStartSeconds,
+      }),
+      ...(settingsUpdate.runnerHearts !== undefined && {
+        runner_hearts: settingsUpdate.runnerHearts,
+        runnerHearts: settingsUpdate.runnerHearts,
+      }),
+      ...(settingsUpdate.tacticalAbilities !== undefined && {
+        tactical_abilities: settingsUpdate.tacticalAbilities,
+        tacticalAbilities: settingsUpdate.tacticalAbilities,
+      }),
+      ...(settingsUpdate.zoneShrinkMode !== undefined && {
+        zone_shrink_mode: settingsUpdate.zoneShrinkMode,
+        zoneShrinkMode: settingsUpdate.zoneShrinkMode,
+      }),
+      ...(settingsUpdate.allowSpectators !== undefined && {
+        allow_spectators: settingsUpdate.allowSpectators,
+        allowSpectators: settingsUpdate.allowSpectators,
+      }),
+    };
+
+    const updatePayload: Record<string, any> = { settings: newSettings };
+    if (playZoneUpdate !== undefined) {
+      updatePayload.play_zone = playZoneUpdate;
+    }
+
+    const { error: updateErr } = await supabase
+      .from('games')
+      .update(updatePayload)
+      .eq('id', gameId);
+
+    if (updateErr) {
+      throw new Error(`Failed to update game settings: ${updateErr.message}`);
+    }
   }
 
   /**

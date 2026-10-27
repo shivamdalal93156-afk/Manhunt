@@ -39,13 +39,21 @@ export interface MatchSettings {
   runnerHearts: number;
   catchRadiusMeters: number;
   zoneShrinkMode?: ZoneShrinkMode;
+  allowSpectators?: boolean;
+  tacticalAbilities?: {
+    enabled: boolean;
+    allowedAbilities: string[];
+    maxUsesPerPlayer?: number | null;
+  };
 }
 
 export interface PlayZoneSettings {
-  type: 'circle';
-  radiusMeters: number;
-  center?: [number, number]; // [lng, lat]
+  type: 'circle' | 'polygon';
+  radiusMeters?: number;
+  center?: [number, number] | { latitude: number; longitude: number };
+  coordinates?: { latitude: number; longitude: number }[];
   shrinkMode?: ZoneShrinkMode;
+  mode?: 'NONE' | 'CIRCLE' | 'POLYGON' | 'CUSTOM';
 }
 
 export interface MatchSession {

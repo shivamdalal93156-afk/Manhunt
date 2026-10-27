@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
+  Clipboard,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,17 +9,31 @@ import {
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import {
-  Badge,
+  Avatar,
   Button,
   Card,
-  ErrorFallback,
+  Chip,
   LoadingSpinner,
+  Screen,
+  TopBar,
 } from '@/components/ui';
+import {
+  ArrowBackIcon,
+  SettingsIcon,
+  CopyIcon,
+  CheckIcon,
+  TimerIcon,
+  RadarIcon,
+  ShapesIcon,
+  FlashIcon,
+  SprintIcon,
+  HeartIcon,
+} from '@/components/ui/Icons';
 import { useLobbyStore } from '@/store/lobbyStore';
 import { LobbyPlayer, PlayerRole } from '@/types/lobby';
-import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
+import { borderRadius, colors, shadows, spacing, typography } from '@/theme/tokens';
 
 export default function LobbyScreen() {
   const router = useRouter();
@@ -26,27 +41,23 @@ export default function LobbyScreen() {
   const {
     session,
     lobbyState,
-    isLoading,
-    error,
     subscribeToLobby,
     updateRole,
     toggleReady,
     startMatch,
     leaveMatch,
-    clearError,
   } = useLobbyStore();
 
   const [copied, setCopied] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
 
   useEffect(() => {
     if (!id) return;
     const unsubscribe = subscribeToLobby(id);
-    return () => {
-      unsubscribe();
-    };
+    return () => unsubscribe();
   }, [id, subscribeToLobby]);
 
-  // Handle match launch -> route to role-specific gameplay screen
+  // Navigate when match launches
   useEffect(() => {
     if (lobbyState?.status === 'COUNTDOWN' || lobbyState?.status === 'ACTIVE') {
       const myRole = session?.myRole ?? 'RUNNER';
@@ -62,549 +73,626 @@ export default function LobbyScreen() {
 
   if (!lobbyState) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <LoadingSpinner message="JOINING SATELLITE LOBBY..." />
-      </SafeAreaView>
+      <Screen>
+        <LoadingSpinner message="JOINING LIVE SQUAD LOBBY..." />
+      </Screen>
     );
   }
 
   const isHost = session?.isHost ?? false;
+  const myPlayerId = session?.myPlayerId;
+  const myPlayer = lobbyState.players.find((p) => p.id === myPlayerId);
+
   const hunters = lobbyState.players.filter((p) => p.role === 'HUNTER');
   const runners = lobbyState.players.filter((p) => p.role === 'RUNNER');
   const referees = lobbyState.players.filter((p) => p.role === 'REFEREE');
 
   const canStartMatch = hunters.length >= 1 && runners.length >= 1;
-  const myPlayer = lobbyState.players.find((p) => p.id === session?.myPlayerId);
 
   const handleCopyCode = () => {
+    Clipboard.setString(lobbyState.joinCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleLeave = () => {
-    Alert.alert('LEAVE LOBBY', 'Are you sure you want to exit this match lobby?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Leave',
-        style: 'destructive',
-        onPress: async () => {
-          await leaveMatch();
-          router.replace('/');
+  const handleLeaveLobby = () => {
+    Alert.alert(
+      'Leave Lobby',
+      isHost
+        ? 'As host, leaving will disband this match lobby. Are you sure?'
+        : 'Are you sure you want to leave this match?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            await leaveMatch();
+            router.replace('/');
+          },
         },
-      },
-    ]);
-  };
-
-  const handleStartGame = async () => {
-    try {
-      await startMatch();
-    } catch (err: unknown) {
-      Alert.alert(
-        'CANNOT START MATCH',
-        err instanceof Error ? err.message : 'Failed to start match on server'
-      );
-    }
-  };
-
-  const renderPlayerRow = (player: LobbyPlayer) => {
-    const isMe = player.id === session?.myPlayerId;
-
-    return (
-      <View key={player.id} style={styles.playerRow}>
-        <View style={styles.playerInfo}>
-          <View
-            style={[
-              styles.avatar,
-              player.role === 'HUNTER' && styles.avatarHunter,
-              player.role === 'RUNNER' && styles.avatarRunner,
-              player.role === 'REFEREE' && styles.avatarReferee,
-            ]}
-          >
-            <Text style={styles.avatarText}>
-              {player.displayName.slice(0, 2).toUpperCase()}
-            </Text>
-          </View>
-          <View style={styles.playerNameCol}>
-            <View style={styles.nameBadges}>
-              <Text style={styles.playerName}>
-                {player.displayName} {isMe ? '(YOU)' : ''}
-              </Text>
-              {player.isHost && <Badge label="HOST" variant="warning" />}
-            </View>
-            <Text style={styles.playerRoleText}>
-              {player.isReady ? 'READY FOR COMBAT' : 'STANDBY'}
-            </Text>
-          </View>
-        </View>
-
-        {/* Host role swap authority controls */}
-        {isHost ? (
-          <View style={styles.hostRoleControls}>
-            <TouchableOpacity
-              style={[
-                styles.roleSwapPill,
-                player.role === 'HUNTER'
-                  ? styles.roleSwapPillHunterActive
-                  : styles.roleSwapPillInactive,
-              ]}
-              onPress={() => updateRole(player.id, 'HUNTER')}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.roleSwapText,
-                  player.role === 'HUNTER' && styles.roleSwapTextHunterActive,
-                ]}
-              >
-                ⚡ CHASER
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.roleSwapPill,
-                player.role === 'RUNNER'
-                  ? styles.roleSwapPillRunnerActive
-                  : styles.roleSwapPillInactive,
-              ]}
-              onPress={() => updateRole(player.id, 'RUNNER')}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.roleSwapText,
-                  player.role === 'RUNNER' && styles.roleSwapTextRunnerActive,
-                ]}
-              >
-                🏃 RUNNER
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <Badge
-            label={player.isReady ? 'READY' : 'WAITING'}
-            variant={player.isReady ? 'safe' : 'neutral'}
-          />
-        )}
-      </View>
+      ]
     );
   };
 
+  const handleSwitchRole = async (targetRole: PlayerRole) => {
+    if (!myPlayerId || session?.myRole === targetRole) return;
+    try {
+      await updateRole(myPlayerId, targetRole);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to switch squad';
+      Alert.alert('Error', msg);
+    }
+  };
+
+  const handleStartGame = async () => {
+    if (!canStartMatch) {
+      Alert.alert(
+        'More Operatives Needed',
+        `A live tactical match requires at least 1 Chaser and 1 Runner (Match Code: ${lobbyState.joinCode}). Would you like to enter Solo Practice to preview your tactical HUD?`,
+        [
+          { text: 'Wait for Squad', style: 'cancel' },
+          {
+            text: 'Solo Practice',
+            onPress: () => {
+              const myRole = session?.myRole ?? 'HUNTER';
+              if (myRole === 'RUNNER') {
+                router.replace('/game/runner');
+              } else if (myRole === 'REFEREE') {
+                router.replace('/game/referee');
+              } else {
+                router.replace('/game/hunter');
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    setIsStarting(true);
+    try {
+      await startMatch();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to launch match.';
+      Alert.alert('Error', msg);
+      setIsStarting(false);
+    }
+  };
+
+  const settings = lobbyState.settings;
+  const playZone = lobbyState.playZone;
+
+  const getPlayZoneLabel = () => {
+    if (!playZone || (playZone as any).mode === 'NONE') return 'Off (Infinite)';
+    if (playZone.type === 'polygon') return 'Custom Polygon';
+    return `${playZone.radiusMeters || 500}m Circle`;
+  };
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Error Alert */}
-        {error && (
-          <ErrorFallback
-            error={error}
-            onRetry={clearError}
-            title="LOBBY ERROR"
-          />
-        )}
+    <Screen scroll>
+      {/* Top Bar with Join Code Capsule & Settings Gear */}
+      <View style={styles.topHeader}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={handleLeaveLobby}
+          style={styles.backBtn}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <ArrowBackIcon size={20} color={colors.text.primary} />
+        </TouchableOpacity>
 
-        {/* Join Code Header Banner */}
-        <Card variant="glass" style={styles.codeCard}>
-          <Text style={styles.codeEyebrow}>INVITATION JOIN CODE</Text>
-          <View style={styles.codeRow}>
-            <Text style={styles.codeText}>{lobbyState.joinCode}</Text>
-            <TouchableOpacity
-              style={styles.copyBtn}
-              onPress={handleCopyCode}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.copyText}>
-                {copied ? 'COPIED!' : 'SHARE CODE'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.codeHint}>
-            Share this 6-character code with players to enter this match.
-          </Text>
-        </Card>
-
-        {/* Match Rule Telemetry */}
-        <View style={styles.telemetryRow}>
-          <View style={styles.telemetryBox}>
-            <Text style={styles.telemetryLabel}>DURATION</Text>
-            <Text style={styles.telemetryVal}>
-              {lobbyState.settings.durationMinutes >= 60
-                ? `${(lobbyState.settings.durationMinutes / 60).toFixed(lobbyState.settings.durationMinutes % 60 ? 1 : 0)}h`
-                : `${lobbyState.settings.durationMinutes}m`}
-            </Text>
-          </View>
-          <View style={styles.telemetryBox}>
-            <Text style={styles.telemetryLabel}>GPS REVEAL</Text>
-            <Text style={styles.telemetryVal}>
-              {lobbyState.settings.locationPingIntervalSeconds >= 3600
-                ? `${(lobbyState.settings.locationPingIntervalSeconds / 3600).toFixed(1).replace(/\.0$/, '')}h`
-                : lobbyState.settings.locationPingIntervalSeconds >= 60
-                ? `${Math.floor(lobbyState.settings.locationPingIntervalSeconds / 60)}m`
-                : `${lobbyState.settings.locationPingIntervalSeconds}s`}
-            </Text>
-          </View>
-          <View style={styles.telemetryBox}>
-            <Text style={styles.telemetryLabel}>PLAY ZONE</Text>
-            <Text style={styles.telemetryVal}>
-              {lobbyState.playZone.radiusMeters >= 1000
-                ? `${(lobbyState.playZone.radiusMeters / 1000).toFixed(lobbyState.playZone.radiusMeters % 1000 ? 1 : 0)}km`
-                : `${lobbyState.playZone.radiusMeters}m`}
-            </Text>
-          </View>
-          <View style={styles.telemetryBox}>
-            <Text style={styles.telemetryLabel}>PLAYERS</Text>
-            <Text style={styles.telemetryVal}>
-              {lobbyState.players.length}/{lobbyState.settings.maxPlayers}
-            </Text>
-          </View>
-        </View>
-
-        {/* Game Mode Banner */}
-        <View style={styles.modeRuleBanner}>
-          <Text style={styles.modeRuleIcon}>
-            {lobbyState.settings.runnerHearts === 1 ? '⚡' : '❤️'}
-          </Text>
-          <Text style={styles.modeRuleText}>
-            {lobbyState.settings.runnerHearts === 1
-              ? 'SUDDEN DEATH: 1 Catch = Immediate Elimination'
-              : `SURVIVAL MODE: Runners have ${lobbyState.settings.runnerHearts} Lives / Hearts`}
-          </Text>
-        </View>
-
-        {/* Hunters Squadron */}
-        <View style={styles.squadHeader}>
-          <Text style={styles.squadTitleHunter}>
-            CHASERS ({hunters.length})
-          </Text>
-          <Badge label="HUNTER" variant="hunter" />
-        </View>
-        <Card variant="hunter" style={styles.squadCard}>
-          {hunters.length > 0 ? (
-            hunters.map(renderPlayerRow)
+        {/* Join Code Capsule */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={handleCopyCode}
+          style={styles.codeCapsule}
+        >
+          <Text style={styles.codeLabel}>CODE</Text>
+          <Text style={styles.codeValue}>{lobbyState.joinCode}</Text>
+          {copied ? (
+            <CheckIcon size={14} color={colors.status.safe} />
           ) : (
-            <Text style={styles.emptySquadText}>
-              No Hunters assigned. Match requires at least 1 Hunter.
-            </Text>
+            <CopyIcon size={14} color={colors.text.muted} />
           )}
-        </Card>
+        </TouchableOpacity>
 
-        {/* Runners Squadron */}
-        <View style={styles.squadHeader}>
-          <Text style={styles.squadTitleRunner}>
-            EVADERS ({runners.length})
-          </Text>
-          <Badge label="RUNNER" variant="runner" />
-        </View>
-        <Card variant="runner" style={styles.squadCard}>
-          {runners.length > 0 ? (
-            runners.map(renderPlayerRow)
-          ) : (
-            <Text style={styles.emptySquadText}>
-              No Runners assigned. Match requires at least 1 Runner.
-            </Text>
-          )}
-        </Card>
+        {/* Advanced Settings Gear */}
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() => router.push('/lobby/settings' as any)}
+          style={styles.gearBtn}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <SettingsIcon size={20} color={colors.text.secondary} />
+        </TouchableOpacity>
+      </View>
 
-        {/* Supervisors Squadron (If any) */}
-        {referees.length > 0 && (
-          <>
-            <View style={styles.squadHeader}>
-              <Text style={styles.squadTitleReferee}>
-                SUPERVISORS ({referees.length})
-              </Text>
-              <Badge label="SAFETY" variant="referee" />
+      <View style={styles.container}>
+        {/* Squad Rosters (2 Columns: Chasers vs Runners) */}
+        <View style={styles.rostersGrid}>
+          {/* Chasers Column */}
+          <View style={styles.squadCol}>
+            <View style={[styles.squadHeader, { borderBottomColor: colors.hunter.primary }]}>
+              <Text style={[styles.squadTitle, { color: colors.hunter.primary }]}>CHASERS</Text>
+              <View style={[styles.countBadge, { backgroundColor: colors.hunter.primary }]}>
+                <Text style={styles.countText}>{hunters.length}</Text>
+              </View>
             </View>
-            <Card variant="referee" style={styles.squadCard}>
-              {referees.map(renderPlayerRow)}
-            </Card>
-          </>
+
+            <View style={styles.playersList}>
+              {hunters.map((p) => {
+                const isMe = p.id === myPlayerId;
+                return (
+                  <Card key={p.id} variant="portal" style={[styles.playerCard, isMe && styles.myPlayerCard]}>
+                    <Avatar name={p.displayName} size="sm" borderRole="chaser" />
+                    <View style={styles.playerMeta}>
+                      <Text style={styles.playerName} numberOfLines={1}>
+                        {p.displayName} {isMe ? '(You)' : ''}
+                      </Text>
+                      <Text style={styles.playerSub}>
+                        {p.isHost ? 'Host' : p.isReady ? 'Ready' : 'Standby'}
+                      </Text>
+                    </View>
+                  </Card>
+                );
+              })}
+
+              {session?.myRole !== 'HUNTER' && (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => handleSwitchRole('HUNTER')}
+                  style={[styles.switchSquadBtn, { borderColor: colors.hunter.primary }]}
+                >
+                  <Text style={[styles.switchSquadText, { color: colors.hunter.primary }]}>
+                    + Switch to Chaser
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          {/* Runners Column */}
+          <View style={styles.squadCol}>
+            <View style={[styles.squadHeader, { borderBottomColor: colors.runner.primary }]}>
+              <Text style={[styles.squadTitle, { color: colors.runner.primary }]}>RUNNERS</Text>
+              <View style={[styles.countBadge, { backgroundColor: colors.runner.primary }]}>
+                <Text style={styles.countText}>{runners.length}</Text>
+              </View>
+            </View>
+
+            <View style={styles.playersList}>
+              {runners.map((p) => {
+                const isMe = p.id === myPlayerId;
+                return (
+                  <Card key={p.id} variant="portal" style={[styles.playerCard, isMe && styles.myPlayerCard]}>
+                    <Avatar name={p.displayName} size="sm" borderRole="runner" />
+                    <View style={styles.playerMeta}>
+                      <Text style={styles.playerName} numberOfLines={1}>
+                        {p.displayName} {isMe ? '(You)' : ''}
+                      </Text>
+                      <Text style={styles.playerSub}>
+                        {p.isHost ? 'Host' : p.isReady ? 'Ready' : 'Standby'}
+                      </Text>
+                    </View>
+                  </Card>
+                );
+              })}
+
+              {session?.myRole !== 'RUNNER' && (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => handleSwitchRole('RUNNER')}
+                  style={[styles.switchSquadBtn, { borderColor: colors.runner.primary }]}
+                >
+                  <Text style={[styles.switchSquadText, { color: colors.runner.primary }]}>
+                    + Switch to Runner
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {runners.length === 0 && (
+                <View style={styles.awaitingCard}>
+                  <View style={styles.awaitingIconCircle}>
+                    <SprintIcon size={18} color={colors.runner.primary} />
+                  </View>
+                  <Text style={styles.awaitingTitle}>Awaiting Runners</Text>
+                  <Text style={styles.awaitingSub}>Invite with code {lobbyState.joinCode}</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </View>
+
+        {/* Referee Row */}
+        {referees.length > 0 || session?.myRole === 'REFEREE' ? (
+          <Card variant="portal" style={styles.refereeCard}>
+            <View style={styles.refereeHeader}>
+              <Ionicons name="eye" size={18} color={colors.referee.primary} />
+              <Text style={styles.refereeTitle}>OVERSEEING REFEREE</Text>
+            </View>
+            {referees.map((r) => (
+              <View key={r.id} style={styles.refereeRow}>
+                <Avatar name={r.displayName} size="sm" borderRole="referee" />
+                <Text style={styles.refereeName}>{r.displayName}</Text>
+              </View>
+            ))}
+          </Card>
+        ) : (
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => handleSwitchRole('REFEREE')}
+            style={styles.becomeRefereeBtn}
+          >
+            <Ionicons name="eye-outline" size={16} color={colors.referee.primary} />
+            <Text style={styles.becomeRefereeText}>Join as Referee (God Mode Spectator)</Text>
+          </TouchableOpacity>
         )}
 
-        {/* Action Controls */}
-        <View style={styles.actionSection}>
+        {/* 2x3 Settings Grid with Tactical Icon Pills */}
+        <Text style={styles.gridSectionHeader}>MATCH CONFIGURATION</Text>
+        <View style={styles.settingsGrid}>
+          {/* Card 1: Duration */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={isHost ? () => router.push('/create' as any) : undefined}
+            style={styles.gridCard}
+          >
+            <View style={[styles.cardIconPill, { backgroundColor: 'rgba(249, 115, 22, 0.12)' }]}>
+              <TimerIcon size={18} color="#EA580C" />
+            </View>
+            <Text style={styles.gridValue}>{settings?.durationMinutes || 30} mins</Text>
+            <Text style={styles.gridLabel}>DURATION</Text>
+          </TouchableOpacity>
+
+          {/* Card 2: Ping Interval */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={isHost ? () => router.push('/create' as any) : undefined}
+            style={styles.gridCard}
+          >
+            <View style={[styles.cardIconPill, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
+              <RadarIcon size={18} color="#2563EB" />
+            </View>
+            <Text style={styles.gridValue}>Every {settings?.locationPingIntervalSeconds || 30}s</Text>
+            <Text style={styles.gridLabel}>RADAR PING</Text>
+          </TouchableOpacity>
+
+          {/* Card 3: Play Zone (Editor) */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={isHost ? () => router.push({ pathname: '/create', params: { step: '3', gameId: lobbyState.gameId } } as any) : undefined}
+            style={styles.gridCard}
+          >
+            <View style={[styles.cardIconPill, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]}>
+              <ShapesIcon size={18} color="#059669" />
+            </View>
+            <Text style={styles.gridValue} numberOfLines={1}>{getPlayZoneLabel()}</Text>
+            <Text style={styles.gridLabel}>PLAY ZONE</Text>
+          </TouchableOpacity>
+
+          {/* Card 4: Abilities */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => router.push('/lobby/settings' as any)}
+            style={styles.gridCard}
+          >
+            <View style={[styles.cardIconPill, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]}>
+              <FlashIcon size={18} color="#D97706" />
+            </View>
+            <Text style={styles.gridValue}>
+              {settings?.tacticalAbilities?.enabled !== false ? 'Enabled' : 'Disabled'}
+            </Text>
+            <Text style={styles.gridLabel}>ABILITIES</Text>
+          </TouchableOpacity>
+
+          {/* Card 5: Head Start */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => router.push('/lobby/settings' as any)}
+            style={styles.gridCard}
+          >
+            <View style={[styles.cardIconPill, { backgroundColor: 'rgba(99, 102, 241, 0.12)' }]}>
+              <SprintIcon size={18} color="#4F46E5" />
+            </View>
+            <Text style={styles.gridValue}>{settings?.headStartSeconds || 60}s</Text>
+            <Text style={styles.gridLabel}>HEAD START</Text>
+          </TouchableOpacity>
+
+          {/* Card 6: Hearts */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => router.push('/lobby/settings' as any)}
+            style={styles.gridCard}
+          >
+            <View style={[styles.cardIconPill, { backgroundColor: 'rgba(239, 68, 68, 0.12)' }]}>
+              <HeartIcon size={18} color="#DC2626" />
+            </View>
+            <Text style={styles.gridValue}>{settings?.runnerHearts || 3} Hearts</Text>
+            <Text style={styles.gridLabel}>HEARTS</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Action Button: Start Match (Host) vs Ready Up (Player) */}
+        <View style={styles.bottomBar}>
           {isHost ? (
-            <>
-              {!canStartMatch && (
-                <Text style={styles.ruleNotice}>
-                  ⚠️ Cannot start: Must have at least 1 Hunter and 1 Runner.
-                </Text>
-              )}
-              <Button
-                title={isLoading ? 'STARTING...' : 'LAUNCH MATCH'}
-                variant="gradient"
-                size="lg"
-                fullWidth
-                disabled={!canStartMatch || isLoading}
-                onPress={handleStartGame}
-                style={styles.mainActionBtn}
-              />
-            </>
+            <Button
+              title={isStarting ? 'LAUNCHING MISSION...' : 'START GAME'}
+              variant="gradient"
+              size="lg"
+              fullWidth
+              loading={isStarting}
+              onPress={handleStartGame}
+            />
           ) : (
             <Button
-              title={myPlayer?.isReady ? 'MARK NOT READY' : 'I AM READY'}
-              variant={myPlayer?.isReady ? 'secondary' : 'gradient'}
+              title={myPlayer?.isReady ? "I'M READY ✓" : 'READY UP'}
+              variant={myPlayer?.isReady ? 'runner' : 'primary'}
               size="lg"
               fullWidth
               onPress={toggleReady}
-              style={styles.mainActionBtn}
             />
           )}
-
-          <Button
-            title="LEAVE MATCH"
-            variant="ghost"
-            size="md"
-            fullWidth
-            onPress={handleLeave}
-          />
         </View>
-
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     backgroundColor: colors.background.base,
   },
-  container: {
-    padding: spacing.lg,
-  },
-  codeCard: {
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.background.surface,
+    borderWidth: 1,
+    borderColor: colors.border.default,
     alignItems: 'center',
-    paddingVertical: spacing.lg,
-    marginBottom: spacing.md,
-    borderColor: 'rgba(232, 93, 59, 0.4)',
+    justifyContent: 'center',
+  },
+  codeCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.background.surface,
     borderWidth: 1.5,
-  },
-  codeEyebrow: {
-    color: colors.hunter.primary,
-    fontSize: typography.fontSize.xs,
-    letterSpacing: typography.letterSpacing.wide,
-    fontWeight: '800',
-    marginBottom: spacing.xs,
-  },
-  codeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
-  codeText: {
-    color: colors.text.primary,
-    fontSize: 34,
-    fontWeight: '900',
-    letterSpacing: 8,
-    fontFamily: typography.fontFamily.mono,
-  },
-  copyBtn: {
-    backgroundColor: 'rgba(232, 93, 59, 0.15)',
-    borderColor: colors.hunter.primary,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs + 3,
+    borderColor: colors.border.default,
     borderRadius: borderRadius.full,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    gap: 6,
+    ...shadows.sm,
   },
-  copyText: {
-    color: colors.hunter.primary,
-    fontSize: typography.fontSize.xs,
+  codeLabel: {
+    fontSize: 10,
     fontWeight: '800',
-    letterSpacing: 1,
-  },
-  codeHint: {
     color: colors.text.muted,
-    fontSize: typography.fontSize.xs,
-    marginTop: spacing.sm,
   },
-  telemetryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
-    gap: spacing.xs,
-  },
-  telemetryBox: {
-    flex: 1,
-    backgroundColor: colors.background.surfaceCard,
-    borderColor: colors.border.glass,
-    borderWidth: 1,
-    borderRadius: borderRadius.md,
-    padding: spacing.sm,
-    alignItems: 'center',
-  },
-  telemetryLabel: {
-    color: colors.text.muted,
-    fontSize: 9,
-    letterSpacing: 1,
-    fontWeight: '700',
-  },
-  telemetryVal: {
+  codeValue: {
+    fontSize: typography.fontSize.base,
+    fontWeight: '800',
+    letterSpacing: typography.letterSpacing.code,
     color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: '800',
-    marginTop: 2,
   },
-
+  gearBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.background.surface,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  container: {
+    padding: spacing.md,
+  },
+  rostersGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  squadCol: {
+    flex: 1,
+    backgroundColor: colors.background.surface,
+    borderRadius: borderRadius.xl,
+    padding: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    minHeight: 220,
+    ...shadows.sm,
+  },
   squadHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: spacing.md,
-    marginBottom: spacing.xs,
-  },
-  squadTitleHunter: {
-    color: colors.hunter.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-  squadTitleRunner: {
-    color: colors.runner.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-  squadTitleReferee: {
-    color: colors.referee.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-  squadCard: {
-    padding: spacing.sm,
+    justifyContent: 'space-between',
+    paddingBottom: spacing.xs + 2,
     marginBottom: spacing.sm,
+    borderBottomWidth: 2,
   },
-  emptySquadText: {
-    color: colors.text.muted,
+  squadTitle: {
     fontSize: typography.fontSize.xs,
-    fontStyle: 'italic',
-    padding: spacing.sm,
-    textAlign: 'center',
+    fontWeight: '800',
+    letterSpacing: 1,
   },
-  playerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  playerInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  avatar: {
-    width: 36,
-    height: 36,
+  countBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: borderRadius.full,
-    backgroundColor: colors.background.elevated,
-    borderWidth: 1.5,
-    borderColor: colors.border.subtle,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.sm,
   },
-  avatarHunter: {
-    borderColor: colors.hunter.primary,
-  },
-  avatarRunner: {
-    borderColor: colors.runner.primary,
-  },
-  avatarReferee: {
-    borderColor: colors.referee.primary,
-  },
-  avatarText: {
-    color: colors.text.primary,
-    fontSize: 11,
+  countText: {
+    color: '#FFFFFF',
+    fontSize: 10,
     fontWeight: '800',
   },
-  playerNameCol: {
-    flex: 1,
+  playersList: {
+    gap: spacing.xs,
   },
-  nameBadges: {
+  playerCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    padding: spacing.xs + 2,
+    borderRadius: borderRadius.md,
+  },
+  myPlayerCard: {
+    borderColor: colors.brand.accent,
+    borderWidth: 1,
+  },
+  playerMeta: {
+    marginLeft: 6,
+    flex: 1,
   },
   playerName: {
+    fontSize: 11,
+    fontWeight: '700',
     color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
+  },
+  playerSub: {
+    fontSize: 9,
+    color: colors.text.muted,
+  },
+  switchSquadBtn: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: borderRadius.md,
+    paddingVertical: 8,
+    alignItems: 'center',
+    marginTop: spacing.xs,
+  },
+  switchSquadText: {
+    fontSize: 10,
     fontWeight: '700',
   },
-  playerRoleText: {
-    color: colors.text.muted,
-    fontSize: 10,
-    marginTop: 2,
+  refereeCard: {
+    padding: spacing.sm,
+    borderRadius: borderRadius.lg,
+    marginBottom: spacing.md,
   },
-  hostRoleControls: {
+  refereeHeader: {
     flexDirection: 'row',
-    gap: 4,
     alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
   },
-  roleSwapPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: borderRadius.sm,
-    borderWidth: 1,
+  refereeTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.referee.primary,
+    letterSpacing: 1,
+  },
+  refereeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  refereeName: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    color: colors.text.primary,
+  },
+  becomeRefereeBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    marginBottom: spacing.md,
   },
-  roleSwapPillInactive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+  becomeRefereeText: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    color: colors.referee.primary,
   },
-  roleSwapPillHunterActive: {
-    borderColor: colors.hunter.primary,
-    backgroundColor: 'rgba(232, 93, 59, 0.25)',
-  },
-  roleSwapPillRunnerActive: {
-    borderColor: colors.runner.primary,
-    backgroundColor: 'rgba(0, 229, 255, 0.2)',
-  },
-  roleSwapText: {
+  gridSectionHeader: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+    letterSpacing: typography.letterSpacing.tactical,
     color: colors.text.muted,
-    fontSize: 10,
+    marginBottom: spacing.xs,
+    marginLeft: 4,
+  },
+  settingsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  gridCard: {
+    width: '48%',
+    backgroundColor: colors.background.surface,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.06)',
+    borderRadius: borderRadius.lg,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    ...shadows.sm,
+  },
+  cardIconPill: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  gridValue: {
+    fontSize: typography.fontSize.sm,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    color: colors.text.primary,
+    marginTop: 2,
+    textAlign: 'center',
   },
-  roleSwapTextHunterActive: {
-    color: colors.brand.gradientEnd,
+  gridLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.text.muted,
+    marginTop: 3,
+    letterSpacing: 0.8,
   },
-  roleSwapTextRunnerActive: {
+  awaitingCard: {
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(0, 229, 255, 0.3)',
+    borderRadius: borderRadius.md,
+    backgroundColor: 'rgba(0, 229, 255, 0.03)',
+    marginTop: spacing.xs,
+  },
+  awaitingIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 229, 255, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  awaitingTitle: {
+    fontSize: 11,
+    fontWeight: '800',
     color: colors.runner.primary,
   },
-  actionSection: {
-    marginTop: spacing.lg,
-    paddingBottom: spacing.xl,
-  },
-  ruleNotice: {
-    color: colors.status.warning,
-    fontSize: typography.fontSize.xs,
+  awaitingSub: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: colors.text.muted,
     textAlign: 'center',
-    marginBottom: spacing.xs,
+    marginTop: 2,
   },
-  mainActionBtn: {
-    marginBottom: spacing.sm,
-  },
-  modeRuleBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    borderWidth: 1,
-    borderRadius: borderRadius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginBottom: spacing.sm,
-    gap: spacing.xs,
-  },
-  modeRuleIcon: {
-    fontSize: 14,
-  },
-  modeRuleText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.xs,
-    fontWeight: '800',
-    letterSpacing: 0.5,
+  bottomBar: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.xl,
   },
 });
