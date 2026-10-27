@@ -1,11 +1,11 @@
 import React from 'react';
-import { StyleSheet, View, ViewStyle } from 'react-native';
+import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { borderRadius, colors, spacing } from '@/theme/tokens';
 
 interface CardProps {
   children: React.ReactNode;
-  variant?: 'default' | 'hunter' | 'runner' | 'referee' | 'elevated' | 'glass';
-  style?: ViewStyle | ViewStyle[];
+  variant?: 'default' | 'hunter' | 'runner' | 'referee' | 'elevated' | 'glass' | 'portal';
+  style?: StyleProp<ViewStyle>;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -25,6 +25,8 @@ export const Card: React.FC<CardProps> = ({
         return styles.elevated;
       case 'glass':
         return styles.glass;
+      case 'portal':
+        return styles.portal;
       default:
         return styles.default;
     }
@@ -61,6 +63,15 @@ const styles = StyleSheet.create({
   referee: {
     borderColor: 'rgba(168, 85, 247, 0.4)',
     backgroundColor: 'rgba(168, 85, 247, 0.08)',
+  },
+  portal: {
+    backgroundColor: colors.portal.card,
+    borderColor: colors.portal.cardBorder,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
 });
 

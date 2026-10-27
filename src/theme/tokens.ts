@@ -1,92 +1,116 @@
 /**
- * Centralized Design Tokens for Hunting Game: GPS Manhunt
- * Exact replica of the official Hunting Game design system:
- * - Signature sunset gradient: Magenta (#BD4798) -> Sunset Coral (#E85D3B) -> Bright Orange (#F9790C)
- * - Deep obsidian void background (#0A0A0A)
- * - Frosted glass card surfaces (rgba(255,255,255,0.07) + 1px white/12% border)
- * - Chaser theme: Sunset Coral (#E85D3B)
- * - Runner theme: High-Vis Cyan / Emerald (#00E5FF / #10B981)
+ * Centralized Design Tokens for GPS Manhunt
+ * Replicated exactly from reference-app design system:
+ * - Pixel-sampled signature sunset gradient: Magenta (#C44C8B) -> Coral (#DC5F52) -> Orange (#F2731D)
+ * - Light surface background (#F8F9FA) with crisp white cards (#FFFFFF) and 1px border (#E5E7EB)
+ * - Clean typography powered by Inter font family
+ * - Chaser theme: #F2731D / #DC5F52
+ * - Runner theme: #06B6D4 / #10B981
+ * - Referee theme: #8B5CF6
  */
 
 export const colors = {
-  // Brand Sunset Gradient Tokens
+  // Brand Sunset Gradient Tokens (Exact sampled values)
   brand: {
-    gradientStart: '#BD4798',
-    gradientMid: '#E85D3B',
-    gradientEnd: '#F9790C',
-    gradient: ['#BD4798', '#E85D3B', '#F9790C'] as const,
-    accent: '#E85D3B',
+    gradientStart: '#C44C8B',
+    gradientMid: '#DC5F52',
+    gradientEnd: '#F2731D',
+    gradient: ['#C44C8B', '#DC5F52', '#F2731D'] as const,
+    accent: '#DC5F52',
   },
 
-  // Deep Obsidian Backgrounds
+  // Light Backgrounds
   background: {
-    base: '#0A0A0A',
-    surface: '#141414',
-    surfaceCard: 'rgba(255, 255, 255, 0.07)',
-    surfaceCardActive: 'rgba(255, 255, 255, 0.12)',
-    elevated: '#1E1E1E',
-    overlay: 'rgba(10, 10, 10, 0.92)',
+    base: '#F8F9FA',
+    surface: '#FFFFFF',
+    surfaceCard: '#FFFFFF',
+    surfaceCardActive: '#F3F4F6',
+    elevated: '#FFFFFF',
+    overlay: 'rgba(0, 0, 0, 0.45)',
   },
 
   // Tactical Role Factions
   hunter: {
-    primary: '#E85D3B',        // Chaser signature Sunset Coral
-    secondary: '#BD4798',
-    glow: 'rgba(232, 93, 59, 0.35)',
-    muted: '#8A2D16',
+    primary: '#F2731D',
+    secondary: '#DC5F52',
+    glow: 'rgba(242, 115, 29, 0.25)',
+    muted: '#C44C8B',
     contrastText: '#FFFFFF',
   },
 
   runner: {
-    primary: '#00E5FF',        // Evader High-Vis Cyan
-    secondary: '#10B981',      // Evader Safe Emerald
-    glow: 'rgba(0, 229, 255, 0.35)',
-    muted: '#006570',
-    contrastText: '#061018',
+    primary: '#06B6D4',
+    secondary: '#10B981',
+    glow: 'rgba(6, 182, 212, 0.25)',
+    muted: '#0E7490',
+    contrastText: '#FFFFFF',
   },
 
   referee: {
-    primary: '#A855F7',        // Overseer Purple
-    glow: 'rgba(168, 85, 247, 0.35)',
-    muted: '#581C87',
+    primary: '#8B5CF6',
+    glow: 'rgba(139, 92, 246, 0.25)',
+    muted: '#6D28D9',
     contrastText: '#FFFFFF',
   },
 
   // Semantic Status
   status: {
-    safe: '#10B981',           // Emerald
-    safeGlow: 'rgba(16, 185, 129, 0.3)',
-    warning: '#F59E0B',        // Amber
-    warningGlow: 'rgba(245, 158, 11, 0.3)',
-    danger: '#EF4444',         // Alert Crimson
-    dangerGlow: 'rgba(239, 68, 68, 0.45)',
-    neutral: '#71717A',        // Zinc Muted
+    safe: '#10B981',
+    safeGlow: 'rgba(16, 185, 129, 0.25)',
+    warning: '#F59E0B',
+    warningGlow: 'rgba(245, 158, 11, 0.25)',
+    danger: '#EF4444',
+    dangerGlow: 'rgba(239, 68, 68, 0.25)',
+    neutral: '#9CA3AF',
   },
 
-  // Typography & Glass Borders
+  // Typography & Content
   text: {
-    primary: '#FFFFFF',
-    secondary: '#A1A1AA',
-    muted: '#71717A',
-    accent: '#E85D3B',
-    cyan: '#00E5FF',
+    primary: '#111827',
+    secondary: '#4B5563',
+    muted: '#9CA3AF',
+    accent: '#DC5F52',
+    cyan: '#06B6D4',
+    white: '#FFFFFF',
   },
 
+  // Borders
   border: {
-    glass: 'rgba(255, 255, 255, 0.12)',
-    subtle: 'rgba(255, 255, 255, 0.08)',
-    active: 'rgba(255, 255, 255, 0.22)',
-    hunter: '#E85D3B',
-    runner: '#00E5FF',
-    gradient: '#E85D3B',
+    subtle: '#F3F4F6',
+    default: '#E5E7EB',
+    glass: '#E5E7EB',
+    active: '#DC5F52',
+    hunter: '#F2731D',
+    runner: '#06B6D4',
+    referee: '#8B5CF6',
+    gradient: '#DC5F52',
+  },
+
+  // UI Surfaces & Components
+  portal: {
+    bg: '#F8F9FA',
+    bgWhite: '#FFFFFF',
+    card: '#FFFFFF',
+    cardBorder: '#E5E7EB',
+    cardHover: '#F9FAFB',
+    textPrimary: '#111827',
+    textSecondary: '#4B5563',
+    textMuted: '#9CA3AF',
+    surface: '#F3F4F6',
+    pillBg: '#F3F4F6',
+    pillBorder: '#E5E7EB',
+    pillText: '#374151',
+    accent: '#DC5F52',
+    accentGlow: 'rgba(220, 95, 82, 0.2)',
   },
 } as const;
 
 export const typography = {
   fontFamily: {
-    regular: 'System',
-    medium: 'System',
-    bold: 'System',
+    regular: 'Inter_400Regular',
+    medium: 'Inter_500Medium',
+    semiBold: 'Inter_600SemiBold',
+    bold: 'Inter_700Bold',
     mono: 'monospace',
   },
   fontSize: {
@@ -96,13 +120,14 @@ export const typography = {
     lg: 18,
     xl: 22,
     xxl: 28,
-    display: 38,
+    display: 36,
   },
   letterSpacing: {
-    tight: 0.5,
-    tactical: 1.5,
-    wide: 2.2,
-    code: 8,
+    tight: 0.2,
+    normal: 0,
+    tactical: 1.2,
+    wide: 2.0,
+    code: 6,
   },
 } as const;
 
@@ -116,11 +141,34 @@ export const spacing = {
 } as const;
 
 export const borderRadius = {
-  xs: 4,
-  sm: 8,
+  xs: 6,
+  sm: 10,
   md: 16,
-  lg: 24,
-  xl: 32,
+  lg: 22,
+  xl: 30,
   full: 9999,
 } as const;
 
+export const shadows = {
+  sm: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  md: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  lg: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+} as const;
