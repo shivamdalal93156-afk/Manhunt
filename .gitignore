@@ -38,3 +38,7 @@ expo-env.d.ts
 !assets/*.jpg
 scripts/
 *.bat
+*.apk
+local_dump.xml
+.idea/
+references/

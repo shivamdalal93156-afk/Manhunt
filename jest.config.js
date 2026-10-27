@@ -3,6 +3,7 @@ module.exports = {
   testEnvironment: 'node',
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^@react-native-google-signin/google-signin$': '<rootDir>/src/__mocks__/googleSigninMock.ts',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {

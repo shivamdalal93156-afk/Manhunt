@@ -1,110 +1,76 @@
-# GPS Manhunt — Real-Life Outdoor Multiplayer Chase Game
+# GPS Manhunt — Real-Life Tactical GPS Pursuit & Evasion
 
-An original, authoritative real-time multiplayer mobile game where players turn outdoor parks, campuses, and neighborhoods into an active playing field.
-
----
-
-## Game Roles & Overview
-
-- **Hunters (Chasers)**: Track runners across an interactive satellite radar map with periodic location pings. Close distance to within 15 meters to execute proximity capture.
-- **Runners (Evaders)**: Evade hunters using a high-precision directional geodesic compass pointing toward the nearest threat, with 3 survival hearts and tactical evasion abilities (Stealth, Map View, Jammer).
-- **Supervisors (Referees / Family Mode)**: Non-combatant moderators with unredacted map overwatch to monitor safety, manage geofences, and resolve disputes.
+An authoritative real-time multiplayer mobile tactical chase game where outdoor parks, campuses, and neighborhoods become an active playing field.
 
 ---
 
-## System Architecture & Completed Implementation
+## What's New: Production UI/UX Overhaul & Architecture
 
-1. **Persistent Authentication & Player Identity (`src/services/auth/`)**:
-   - Stable anonymous guest profiles persisted across app restarts via AsyncStorage.
-   - Live synchronization with Supabase `profiles` table.
-2. **Authoritative Multiplayer Lobby Engine (`src/services/lobby/`)**:
-   - 6-character cryptographically generated join codes.
-   - Synchronized player rosters, squad switching (Hunter / Runner / Referee), readiness tracking.
-   - Host controls with server-side validation ($\ge 1$ Hunter & $\ge 1$ Runner required before launch).
-   - Resilient multi-client fallback ensuring 100% playable local & simulated matches.
+- **Visual Design System**:
+  - Sampled sunset gradient (`#C44C8B` ➔ `#DC5F52` ➔ `#F2731D`).
+  - Crisp light surface theme (`#F8F9FA` background, `#FFFFFF` cards, `#E5E7EB` borders) with high-legibility Inter typography.
+  - Dedicated screen routing without bottom tab bars (Home, Friends, Profile, Settings, Rules, Play Zone Editor).
+- **Google OAuth Authentication**:
+  - Native Google Sign-In with Supabase ID Token exchange (`@react-native-google-signin/google-signin`).
+  - Zero guest/anonymous modes — verified player accounts only.
+  - Tactical callsign `@username` selection with live server-side availability checks and custom photo uploads.
+- **Custom Play Zone Editor (`/map/editor`)**:
+  - **Off**: Infinite/boundless play zone with null-safe game telemetry.
+  - **Circle**: Interactive center anchor & perimeter resize dot handles, presets from 300m up to 400km.
+  - **Custom Polygon**: 3 to 12 vertices, realtime area calculation, ray-casting boundary checks, and Jordan curve non-self-intersecting edge validation.
+- **Role Hierarchy**:
+  - **Chaser**: Satellite radar map tracking runners with periodic location pings and 4-digit catch verification keypad.
+  - **Runner**: Geodesic directional threat compass, 4-digit secret catch-code card, hearts bar, lethal threat banner with escape vectors, and tactical abilities (Stealth, Map View, Jammer).
+  - **Referee**: God-mode spectator view with boundary event logs and match pause/resume controls.
+
+---
+
+## System Architecture
+
+1. **Google Auth & Profile Service (`src/services/auth/`)**:
+   - Google Sign-In with Supabase ID token exchange.
+   - Profile management and database synchronization in `public.profiles`.
+2. **Authoritative Multiplayer Lobby (`src/services/lobby/`)**:
+   - 6-character cryptographic match codes.
+   - 2-column Chasers vs Runners rosters with Referee row and 2x3 settings grid.
+   - Host controls with server-side validation ($\ge 1$ Chaser & $\ge 1$ Runner required for live match).
 3. **Pure Mathematical Geo Engine (`src/lib/geo/`)**:
-   - Haversine metric distance calculation with finite bounds validation.
-   - Initial forward azimuth bearing and compass relative angle normalization $[0, 360)$.
-   - Geofence circle and polygon ray-casting with 15m out-of-bounds warning grace zones.
-   - Location freshness tiers (`FRESH`, `DELAYED`, `STALE`, `EXPIRED`) and GPS accuracy filtering.
+   - Haversine metric distance and forward azimuth bearing.
+   - Geofence circle and polygon ray-casting with 15m out-of-bounds grace warnings.
+   - Self-intersection and spherical area calculation.
 4. **Authoritative Match & Catch Engine (`src/services/game/`)**:
-   - Server-authoritative catch validation strictly enforcing $15\text{m}$ proximity threshold (with $5\text{m}$ GPS variance allowance).
-   - Atomic heart decrementing and player elimination logic.
-   - Tactical ability engine: Stealth location suppression (45s), Map View reveal (15s), Radar Ping (instant refresh), and Signal Jammer (20s).
-   - Win condition evaluation (All runners eliminated = Hunters win; timer expires with $\ge 1$ runner alive = Runners win).
-5. **Decoupled Location Service (`src/services/location/`)**:
-   - `ILocationService` abstraction with `ExpoLocationService` for real hardware and `MockLocationService` for multi-client automated testing.
-   - Zero tracking on app open; tracking is explicitly gated behind live matches and automatically ceases upon match conclusion.
-6. **Tactical Outdoor HUD (`src/theme/`, `src/components/`, `src/app/`)**:
-   - High-contrast obsidian dark palette (`#0B0E14`) engineered for direct sunlight legibility and low OLED battery consumption.
-   - Interactive Directional Geodesic Compass, Tactical Radar Map, and Ability Dock.
-   - Interactive Play-Zone Editor (`src/app/map/editor.tsx`) and Tactical Handbook (`src/app/rules.tsx`).
+   - Proximity verification strictly enforcing 15m capture threshold.
+   - Secret 4-digit catch-code verification with atomic heart decrementing.
+   - Electronic warfare tactical abilities (Stealth, Jammer, Radar Ping, Map Scan).
 
 ---
 
-## Quick Start & Verification
+## Verification & Build
 
-### 1. Prerequisites
-- [Node.js](https://nodejs.org/) v18+ (tested on v24.13.0)
-- npm or yarn
-
-### 2. Setup
-```bash
-git clone <repo-url>
-cd manhunt
-npm install
-cp .env.example .env
-```
-
-### 3. Run Unit Tests (67 Tests)
-```bash
-npm test
-```
-Verifies distance calculations, bearings, heading transitions, antimeridian boundary crossings, geofencing, freshness, location service contracts, lobby state machines, and authoritative catch rules.
-
-### 4. Type Checking
+### 1. TypeScript Verification
 ```bash
 npm run typecheck
+# 0 errors
 ```
 
-### 5. Start Development Server
+### 2. Unit Test Suite (99 Tests)
 ```bash
-npx expo start
+npm test
+# 13 test suites passed, 99 tests passed
 ```
-- Press `a` for Android Emulator.
-- Press `w` for Web preview.
-- Or scan QR code with your phone using the Expo Go mobile app.
 
----
+### 3. Project Health
+```bash
+npx expo-doctor
+# 18/18 checks passed. No issues detected!
+```
 
-## Multi-Device Testing Walkthrough
-
-To test a live 2-player match:
-1. **Device 1 (Host)**:
-   - Open app $\to$ tap **CREATE MATCH**.
-   - Configure parameters (Duration: 30m, Ping: 30s, Zone: 500m) $\to$ tap **INITIALIZE LOBBY**.
-   - Note the 6-character Join Code (e.g. `HX89K2`).
-2. **Device 2 (Guest)**:
-   - Open app $\to$ tap **JOIN WITH CODE**.
-   - Enter the 6-character code $\to$ select squad (Runner) $\to$ tap **JOIN SQUAD LOBBY**.
-3. **In the Lobby**:
-   - Both devices see the live synchronized roster.
-   - Host assigns Device 1 as Hunter and Device 2 as Runner.
-   - Device 2 marks **I AM READY**.
-   - Host taps **LAUNCH MATCH**.
-4. **During Active Gameplay**:
-   - Device 1 enters the **Hunter Radar HUD**, tracking runner pings.
-   - Device 2 enters the **Runner Compass HUD**, navigating via directional threat needle.
-   - As Device 1 closes within 15 meters, the **CONFIRM CATCH** trigger activates.
-   - Upon completing the match, both devices transition to the **Match Debrief Screen** and GPS tracking automatically stops.
-
----
-
-## Database Migrations (Supabase)
-The database schema and authoritative RPC functions are documented in:
-- `supabase/migrations/20261024_init_lobby_schema.sql`
-
-To apply to your Supabase project:
-1. Open the [Supabase Dashboard](https://supabase.com/dashboard) for project `qlurxqgestcmrqwsbyfo`.
-2. Go to **SQL Editor** $\to$ **New Query**.
-3. Paste the contents of `supabase/migrations/20261024_init_lobby_schema.sql` and run.
+### 4. Build Release APK
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot"
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+cd android
+.\gradlew.bat assembleRelease
+cd ..
+```
+Outputs: `Manhunt-Release.apk`

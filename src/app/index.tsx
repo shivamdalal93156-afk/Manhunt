@@ -1,523 +1,501 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   AppState,
-  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import {
-  Badge,
+  AddUserIcon,
+  Avatar,
   Button,
   Card,
+  Chip,
+  HelpIcon,
   PermissionPrompt,
+  Screen,
+  SettingsIcon,
 } from '@/components/ui';
 import { useLocation } from '@/hooks/useLocation';
-import { guestAuth } from '@/services/auth/guestAuth';
+import { authService, UserAccount } from '@/services/auth/authService';
+import { progressionService } from '@/services/progression/progressionService';
 import { sessionManager, PersistedMatchSession } from '@/services/session/sessionManager';
 import { useLobbyStore } from '@/store/lobbyStore';
-import { PlayerProfile } from '@/types/lobby';
-import { borderRadius, colors, spacing, typography } from '@/theme/tokens';
+import { PlayerProfile, PlayerRole } from '@/types/lobby';
+import { PlayerProgression } from '@/types/progression';
+import { borderRadius, colors, shadows, spacing, typography } from '@/theme/tokens';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { permissionStatus, currentLocation, requestPermission } = useLocation();
-  const { restoreSession } = useLobbyStore();
-  const [requestingPerm, setRequestingPerm] = useState(false);
+  const { permissionStatus, requestPermission } = useLocation();
+  const { joinMatch, restoreSession } = useLobbyStore();
+
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
+  const [progression, setProgression] = useState<PlayerProgression | null>(null);
   const [activeSession, setActiveSession] = useState<PersistedMatchSession | null>(null);
 
-  const checkActiveMission = async () => {
-    const saved = await sessionManager.getActiveSession();
-    if (saved) {
-      const status = await sessionManager.verifyServerStatus(saved.gameId);
-      if (status === 'ACTIVE' || status === 'LOBBY') {
-        setActiveSession(saved);
-      } else {
-        await sessionManager.clearActiveSession();
-        setActiveSession(null);
-      }
-    } else {
-      setActiveSession(null);
-    }
-  };
+  // Join match state
+  const [joinCode, setJoinCode] = useState('');
+  const [selectedRole, setSelectedRole] = useState<PlayerRole>('RUNNER');
+  const [isJoining, setIsJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   useEffect(() => {
-    guestAuth.getGuestProfile().then(setProfile);
-    checkActiveMission();
+    loadUserData();
+    checkActiveSession();
 
-    const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        checkActiveMission();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        checkActiveSession();
       }
     });
 
     return () => sub.remove();
   }, []);
 
-  const handleRequestPermission = async () => {
-    setRequestingPerm(true);
+  const loadUserData = async () => {
+    const user = await authService.loadSession();
+    if (!user) {
+      router.replace('/auth' as any);
+      return;
+    }
+    setCurrentUser(user);
+
+    const prof: PlayerProfile = {
+      id: user.id,
+      displayName: user.displayName,
+      isGuest: false,
+    };
+    setProfile(prof);
+
+    const prog = await progressionService.getProgression(prof.id, prof.displayName);
+    setProgression(prog);
+  };
+
+  const checkActiveSession = async () => {
     try {
-      await requestPermission();
-    } finally {
-      setRequestingPerm(false);
+      const saved = await sessionManager.getActiveSession();
+      if (saved) {
+        const status = await sessionManager.verifyServerStatus(saved.gameId);
+        if (status === 'ACTIVE' || status === 'LOBBY') {
+          setActiveSession(saved);
+        } else {
+          await sessionManager.clearActiveSession();
+          setActiveSession(null);
+        }
+      } else {
+        setActiveSession(null);
+      }
+    } catch {
+      setActiveSession(null);
     }
   };
 
-  const handleResumeMission = () => {
-    if (!activeSession) return;
-    restoreSession(activeSession);
-    router.push(activeSession.route as any);
+  const handleJoinGame = async () => {
+    const code = joinCode.trim().toUpperCase();
+    setJoinError(null);
+
+    if (code.length !== 6) {
+      setJoinError('Please enter a valid 6-character match code.');
+      return;
+    }
+
+    setIsJoining(true);
+    try {
+      const matchSession = await joinMatch(code, selectedRole);
+      if (matchSession?.gameId) {
+        router.push(`/lobby/${matchSession.gameId}` as any);
+      } else {
+        const err = useLobbyStore.getState().error;
+        setJoinError(err || 'Failed to join match. Check game code.');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unable to join match.';
+      setJoinError(msg);
+    } finally {
+      setIsJoining(false);
+    }
   };
 
-  const handleAbandonMission = () => {
-    Alert.alert(
-      'LEAVE ACTIVE MATCH',
-      'Are you sure you want to exit your ongoing match?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Leave',
-          style: 'destructive',
-          onPress: async () => {
-            await sessionManager.clearActiveSession();
-            setActiveSession(null);
-          },
-        },
-      ]
-    );
+  const handleResumeActiveSession = async () => {
+    if (!activeSession) return;
+    try {
+      restoreSession(activeSession);
+      if (activeSession.myRole === 'HUNTER') {
+        router.push('/game/hunter' as any);
+      } else if (activeSession.myRole === 'REFEREE') {
+        router.push('/game/referee' as any);
+      } else {
+        router.push('/game/runner' as any);
+      }
+    } catch {
+      Alert.alert('Session Expired', 'The match has already concluded.');
+      await sessionManager.clearActiveSession();
+      setActiveSession(null);
+    }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Top Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.eyebrow}>REAL-LIFE GPS PURSUIT</Text>
-            <Text style={styles.title}>HUNTING GAME</Text>
-          </View>
+    <Screen scroll>
+      {/* Top Navigation Bar mirroring Reference 8 */}
+      <View style={styles.topHeader}>
+        {/* Left: Add Friend Pill */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={() => router.push('/friends' as any)}
+          style={styles.addFriendPill}
+        >
+          <AddUserIcon size={16} color={colors.text.primary} />
+          <Text style={styles.addFriendText}>Add a friend</Text>
+        </TouchableOpacity>
+
+        {/* Right: Rules (?) Button & Profile Capsule */}
+        <View style={styles.headerRight}>
           <TouchableOpacity
-            style={styles.settingsBtn}
-            onPress={() => router.push('/settings')}
             activeOpacity={0.7}
+            onPress={() => router.push('/rules' as any)}
+            style={styles.rulesBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Text style={styles.settingsIcon}>⚙</Text>
+            <HelpIcon size={22} color={colors.text.secondary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => router.push('/settings' as any)}
+            style={styles.rulesBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <SettingsIcon size={20} color={colors.text.secondary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => router.push('/profile' as any)}
+            style={styles.profileCapsule}
+          >
+            <Avatar uri={currentUser?.avatarUrl} name={currentUser?.displayName} size="sm" />
+            <View style={styles.levelBadge}>
+              <Text style={styles.levelText}>{progression?.level || 1}</Text>
+            </View>
           </TouchableOpacity>
         </View>
+      </View>
 
-        {/* Persistent Active Combat Mission Resume Banner */}
+      <View style={styles.container}>
+        {/* Permission Banner if location not granted */}
+        {permissionStatus !== 'granted' && (
+          <View style={styles.permissionBox}>
+            <PermissionPrompt onGrant={requestPermission} />
+          </View>
+        )}
+
+        {/* Active Mission Banner */}
         {activeSession && (
-          <Card variant="glass" style={styles.activeMissionCard}>
+          <Card variant="portal" style={styles.activeMissionCard}>
             <View style={styles.activeMissionHeader}>
-              <View style={styles.pulsingBadge}>
-                <View style={styles.pulsingDot} />
-                <Text style={styles.pulsingText}>MISSION IN PROGRESS</Text>
-              </View>
-              <Badge
-                label={activeSession.myRole === 'RUNNER' ? '🏃 RUNNER' : '⚡ CHASER'}
-                variant={activeSession.myRole === 'RUNNER' ? 'safe' : 'danger'}
-              />
+              <View style={styles.livePulseDot} />
+              <Text style={styles.activeMissionTitle}>LIVE MATCH IN PROGRESS</Text>
             </View>
-
-            <Text style={styles.activeMissionTitle}>
-              ACTIVE MATCH #{activeSession.joinCode}
+            <Text style={styles.activeMissionSubtitle}>
+              You have an ongoing match ({activeSession.myRole}). Reconnect immediately!
             </Text>
-            <Text style={styles.activeMissionSub}>
-              You have an active ongoing game! The app remembered your session so you were not kicked out when switching apps.
-            </Text>
-
-            <View style={styles.activeMissionActions}>
-              <Button
-                title="⚡ RESUME MISSION"
-                variant="gradient"
-                size="md"
-                onPress={handleResumeMission}
-                style={{ flex: 1 }}
-              />
-              <TouchableOpacity
-                style={styles.abandonBtn}
-                onPress={handleAbandonMission}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.abandonText}>QUIT</Text>
-              </TouchableOpacity>
-            </View>
+            <Button
+              title="RECONNECT TO MISSION"
+              variant="hunter"
+              size="sm"
+              onPress={handleResumeActiveSession}
+              style={{ marginTop: spacing.sm }}
+            />
           </Card>
         )}
 
-        {/* Player Profile Banner */}
-        <Card variant="glass" style={styles.profileCard}>
-          <View style={styles.profileRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {profile?.displayName ? profile.displayName.slice(0, 2).toUpperCase() : 'HG'}
-              </Text>
-            </View>
-            <View style={styles.profileInfo}>
-              <View style={styles.nameRow}>
-                <Text style={styles.profileName}>
-                  {profile?.displayName ? profile.displayName.toUpperCase() : 'PLAYER'}
-                </Text>
-                <Badge label="ONLINE" variant="safe" />
-              </View>
-              <Text style={styles.profileSub}>READY FOR NEXT MATCH</Text>
-            </View>
+        {/* Join Game Card (Reference 8) */}
+        <Card variant="portal" style={styles.joinCard}>
+          <Text style={styles.cardHeader}>GOT A CODE?</Text>
+          <Text style={styles.cardSubtitle}>
+            Enter the 6-character match code from your host
+          </Text>
+
+          <TextInput
+            style={styles.codeInput}
+            placeholder="ABC123"
+            placeholderTextColor={colors.text.muted}
+            value={joinCode}
+            onChangeText={(txt) => {
+              setJoinCode(txt.toUpperCase().slice(0, 6));
+              setJoinError(null);
+            }}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={6}
+          />
+
+          {/* Role Selection Chips */}
+          <Text style={styles.roleLabel}>CHOOSE YOUR SQUAD ROLE</Text>
+          <View style={styles.roleChipsRow}>
+            <Chip
+              label="Chaser"
+              selected={selectedRole === 'HUNTER'}
+              onPress={() => setSelectedRole('HUNTER')}
+              variant="chaser"
+              style={styles.roleChip}
+            />
+            <Chip
+              label="Runner"
+              selected={selectedRole === 'RUNNER'}
+              onPress={() => setSelectedRole('RUNNER')}
+              variant="runner"
+              style={styles.roleChip}
+            />
+            <Chip
+              label="Referee"
+              selected={selectedRole === 'REFEREE'}
+              onPress={() => setSelectedRole('REFEREE')}
+              variant="referee"
+              style={styles.roleChip}
+            />
           </View>
-          <View style={styles.telemetryDivider} />
-          <View style={styles.telemetryRow}>
-            <View style={styles.telemetryItem}>
-              <Text style={styles.telemetryLabel}>GPS STATUS</Text>
-              <Text
-                style={[
-                  styles.telemetryVal,
-                  {
-                    color:
-                      permissionStatus === 'granted'
-                        ? colors.status.safe
-                        : colors.status.warning,
-                  },
-                ]}
-              >
-                {permissionStatus === 'granted' ? 'LOCK ACQUIRED' : 'NEEDS PERMISSION'}
-              </Text>
+
+          {joinError && (
+            <View style={styles.errorBox}>
+              <Ionicons name="alert-circle" size={16} color={colors.status.danger} />
+              <Text style={styles.errorText}>{joinError}</Text>
             </View>
-            <View style={styles.telemetryItem}>
-              <Text style={styles.telemetryLabel}>ACCURACY</Text>
-              <Text style={styles.telemetryVal}>
-                {currentLocation?.accuracy
-                  ? `±${currentLocation.accuracy.toFixed(1)}m`
-                  : 'STANDBY'}
-              </Text>
-            </View>
-          </View>
+          )}
+
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={handleJoinGame}
+            disabled={isJoining || joinCode.length !== 6}
+            style={[
+              styles.joinBtn,
+              (isJoining || joinCode.length !== 6) && styles.joinBtnDisabled,
+            ]}
+          >
+            {isJoining ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={styles.joinBtnText}>JOIN MATCH</Text>
+            )}
+          </TouchableOpacity>
         </Card>
 
-        {/* Location Permission Prompt (Shown if not yet granted) */}
-        {permissionStatus !== 'granted' && (
-          <PermissionPrompt
-            onGrant={handleRequestPermission}
-            loading={requestingPerm}
-          />
-        )}
-
-        {/* Primary Action Buttons */}
-        <View style={styles.actions}>
+        {/* Start Game Section (Reference 8) */}
+        <View style={styles.hostSection}>
           <Button
-            title="CREATE MATCH"
+            title="START A NEW GAME"
             variant="gradient"
             size="lg"
             fullWidth
-            onPress={() => router.push('/create')}
-            style={styles.actionBtn}
+            onPress={() => router.push('/create' as any)}
           />
-
-          <Button
-            title="JOIN WITH CODE"
-            variant="secondary"
-            size="lg"
-            fullWidth
-            onPress={() => router.push('/join')}
-            style={styles.actionBtn}
-          />
-
-          <Button
-            title="🛰️ TACTICAL MAP & SATELLITE"
-            variant="ghost"
-            size="md"
-            fullWidth
-            onPress={() => router.push('/map/editor')}
-            style={styles.actionBtn}
-          />
-        </View>
-
-        {/* Game Rules & Intelligence Showcase */}
-        <TouchableOpacity
-          style={styles.sectionHeader}
-          onPress={() => router.push('/rules')}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.sectionTitle}>GAMEPLAY ROLES</Text>
-          <Badge label="RULES & GUIDE ↗" variant="neutral" />
-        </TouchableOpacity>
-
-        <Card variant="hunter" style={styles.roleCard}>
-          <View style={styles.roleHeader}>
-            <Text style={styles.roleTitleHunter}>CHASERS (HUNTERS)</Text>
-            <Badge label="RADAR" variant="hunter" />
-          </View>
-          <Text style={styles.roleDesc}>
-            Track runners using periodic satellite radar pings. Close distance to within
-            15m to physically catch them and verify their 4-digit secret code.
-          </Text>
-        </Card>
-
-        <Card variant="runner" style={styles.roleCard}>
-          <View style={styles.roleHeader}>
-            <Text style={styles.roleTitleRunner}>EVADERS (RUNNERS)</Text>
-            <Badge label="COMPASS" variant="runner" />
-          </View>
-          <Text style={styles.roleDesc}>
-            Chasers are invisible on your map. Rely on your directional threat compass and
-            tactical stealth abilities to survive until the timer expires.
-          </Text>
-        </Card>
-
-        <Card variant="referee" style={styles.roleCard}>
-          <View style={styles.roleHeader}>
-            <Text style={styles.roleTitleReferee}>SUPERVISORS (FAMILY MODE)</Text>
-            <Badge label="SAFETY" variant="referee" />
-          </View>
-          <Text style={styles.roleDesc}>
-            Non-combatant referee role to monitor safety, maintain geofenced boundaries,
-            and oversee real-world games in outdoor parks.
-          </Text>
-        </Card>
-
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            HUNTING GAME • GPS MANHUNT V1.0 • PRIVACY PROTECTED
+          <Text style={styles.hostSubtitle}>
+            Create a match lobby, customize play zone, and invite friends.
           </Text>
         </View>
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </Screen>
   );
-
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     backgroundColor: colors.background.base,
   },
-  container: {
-    padding: spacing.lg,
-  },
-  header: {
+  addFriendPill: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.lg,
-  },
-  eyebrow: {
-    fontSize: typography.fontSize.xs,
-    letterSpacing: typography.letterSpacing.wide,
-    color: colors.hunter.primary,
-    fontWeight: '700',
-  },
-  title: {
-    fontSize: typography.fontSize.xxl,
-    fontWeight: '900',
-    color: colors.text.primary,
-    letterSpacing: typography.letterSpacing.tactical,
-  },
-  settingsBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: borderRadius.md,
     backgroundColor: colors.background.surface,
-    borderColor: colors.border.subtle,
     borderWidth: 1,
+    borderColor: colors.border.default,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 6,
+    ...shadows.sm,
+  },
+  addFriendText: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: '700',
+    color: colors.text.primary,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  rulesBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: colors.background.surface,
+    borderWidth: 1,
+    borderColor: colors.border.default,
   },
-  settingsIcon: {
-    color: colors.text.primary,
-    fontSize: 20,
+  profileCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  levelBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -4,
+    backgroundColor: colors.brand.accent,
+    borderRadius: 8,
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  levelText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  container: {
+    padding: spacing.md,
+  },
+  permissionBox: {
+    marginBottom: spacing.md,
   },
   activeMissionCard: {
-    marginBottom: spacing.md,
-    backgroundColor: 'rgba(232, 93, 59, 0.12)',
-    borderColor: colors.brand.gradientMid,
-    borderWidth: 1.5,
     padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.status.safe,
+    marginBottom: spacing.md,
   },
   activeMissionHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing.xs,
+    gap: 8,
   },
-  pulsingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  pulsingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  livePulseDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: colors.status.safe,
   },
-  pulsingText: {
-    color: colors.status.safe,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
   activeMissionTitle: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '800',
     color: colors.text.primary,
-    fontSize: typography.fontSize.lg,
-    fontWeight: '900',
-    letterSpacing: 1,
-    marginTop: 2,
-    marginBottom: 4,
+    letterSpacing: typography.letterSpacing.tactical,
   },
-  activeMissionSub: {
+  activeMissionSubtitle: {
+    fontSize: typography.fontSize.xs,
     color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    lineHeight: 16,
-    marginBottom: spacing.md,
+    marginTop: 4,
   },
-  activeMissionActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  abandonBtn: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
-    borderRadius: borderRadius.md,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  abandonText: {
-    color: colors.status.danger,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-  profileCard: {
-    marginBottom: spacing.md,
-  },
-  profileRow: {
-    flexDirection: 'row',
+  joinCard: {
+    padding: spacing.xl,
+    borderRadius: borderRadius.xl,
+    marginBottom: spacing.lg,
     alignItems: 'center',
   },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.background.elevated,
-    borderColor: colors.hunter.primary,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    color: colors.hunter.primary,
+  cardHeader: {
+    fontSize: 22,
     fontWeight: '800',
-    fontSize: typography.fontSize.sm,
-  },
-  profileInfo: {
-    marginLeft: spacing.md,
-    flex: 1,
-  },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  profileName: {
     color: colors.text.primary,
-    fontSize: typography.fontSize.base,
+    letterSpacing: typography.letterSpacing.tactical,
+  },
+  cardSubtitle: {
+    fontSize: typography.fontSize.xs,
+    color: colors.text.muted,
+    marginTop: 4,
+    marginBottom: spacing.lg,
+  },
+  codeInput: {
+    width: '100%',
+    height: 60,
+    borderRadius: borderRadius.lg,
+    borderWidth: 2,
+    borderColor: colors.border.default,
+    backgroundColor: '#FFFFFF',
+    fontSize: 28,
     fontWeight: '800',
-    letterSpacing: typography.letterSpacing.tactical,
+    letterSpacing: typography.letterSpacing.code,
+    textAlign: 'center',
+    color: colors.text.primary,
+    marginBottom: spacing.lg,
   },
-  profileSub: {
-    color: colors.text.muted,
+  roleLabel: {
     fontSize: typography.fontSize.xs,
-    marginTop: 2,
-  },
-  telemetryDivider: {
-    height: 1,
-    backgroundColor: colors.border.subtle,
-    marginVertical: spacing.md,
-  },
-  telemetryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  telemetryItem: {
-    flex: 1,
-  },
-  telemetryLabel: {
-    color: colors.text.muted,
-    fontSize: typography.fontSize.xs,
-    letterSpacing: typography.letterSpacing.tactical,
-  },
-  telemetryVal: {
-    fontSize: typography.fontSize.sm,
     fontWeight: '700',
-    marginTop: 2,
-    color: colors.text.primary,
-  },
-  actions: {
-    marginVertical: spacing.md,
-  },
-  actionBtn: {
-    marginVertical: spacing.xs + 2,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: spacing.md,
+    letterSpacing: typography.letterSpacing.tactical,
+    color: colors.text.muted,
     marginBottom: spacing.sm,
   },
-  sectionTitle: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-    letterSpacing: typography.letterSpacing.wide,
-    fontWeight: '700',
-  },
-  roleCard: {
-    marginVertical: spacing.xs + 2,
-  },
-  roleHeader: {
+  roleChipsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  roleChip: {
+    flex: 1,
+  },
+  errorBox: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.xs,
+    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    borderRadius: borderRadius.md,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+    width: '100%',
+    gap: 6,
   },
-  roleTitleHunter: {
-    color: colors.hunter.primary,
-    fontWeight: '800',
-    fontSize: typography.fontSize.base,
-    letterSpacing: typography.letterSpacing.tactical,
+  errorText: {
+    flex: 1,
+    fontSize: typography.fontSize.xs,
+    color: colors.status.danger,
+    fontWeight: '600',
   },
-  roleTitleRunner: {
-    color: colors.runner.primary,
-    fontWeight: '800',
-    fontSize: typography.fontSize.base,
-    letterSpacing: typography.letterSpacing.tactical,
+  joinBtn: {
+    width: '100%',
+    height: 50,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.text.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.sm,
   },
-  roleTitleReferee: {
-    color: colors.referee.primary,
-    fontWeight: '800',
-    fontSize: typography.fontSize.base,
-    letterSpacing: typography.letterSpacing.tactical,
+  joinBtnDisabled: {
+    opacity: 0.4,
   },
-  roleDesc: {
-    color: colors.text.secondary,
+  joinBtnText: {
     fontSize: typography.fontSize.sm,
-    lineHeight: 19,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: typography.letterSpacing.tactical,
   },
-  footer: {
-    paddingVertical: spacing.xl,
+  hostSection: {
+    marginTop: spacing.sm,
     alignItems: 'center',
   },
-  footerText: {
+  hostSubtitle: {
+    fontSize: typography.fontSize.xs,
     color: colors.text.muted,
-    fontSize: 10,
-    letterSpacing: 1.2,
     textAlign: 'center',
+    marginTop: 8,
   },
 });
